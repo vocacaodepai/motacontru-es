@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [{ "source": "/api/(.*)", "destination": "/api/index.js" }],
+  "crons": [{ "path": "/api/cron/avisos", "schedule": "0 10 * * *" }],
   "functions": { "api/index.js": { "maxDuration": 60, "includeFiles": "src/schema.sql" } }
 }

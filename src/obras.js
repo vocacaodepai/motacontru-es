@@ -422,3 +422,13 @@ export async function criarDeOrcamento(usuario, orcamentoId, b = {}) {
   const nome = txt(b.nome) || `${o.produto_desc || o.produto || 'Obra'} — ${o.cliente}`;
   return salvar(usuario, null, { ...b, nome, cliente_id: o.cliente_id, orcamento_id: o.id, valor_contrato: b.valor_contrato ?? o.valor, status: 'planejamento', tipo: b.tipo || 'residencial' });
 }
+
+// Localização da obra no mapa (latitude/longitude em graus decimais)
+export async function definirLocal(usuario, id, b) {
+  soGestao(usuario);
+  const lat = b.lat === '' || b.lat == null ? null : Number(String(b.lat).replace(',', '.')), lng = b.lng === '' || b.lng == null ? null : Number(String(b.lng).replace(',', '.'));
+  if ((lat == null) !== (lng == null)) throw new ErroNegocio('Informe latitude e longitude.');
+  if (lat != null && !(lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180)) throw new ErroNegocio('Coordenadas inválidas (latitude -90 a 90, longitude -180 a 180).');
+  const r = await one('UPDATE obras SET lat = $1, lng = $2 WHERE id = $3 RETURNING id', [lat, lng, id]);
+  if (!r) throw new ErroNegocio('Obra não encontrada.', 404);
+}

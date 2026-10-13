@@ -540,6 +540,7 @@ export async function popularDemo() {
     await acessoCli('Roberto Vista Mar (cliente Barra)', 'cliente.vistamar', O.d);
     // fotos liberadas ao cliente
     await query("UPDATE obra_fotos SET visivel_cliente = 1 WHERE obra_id IN ($1,$2) AND id % 2 = 0", [O.a, O.d]);
+    for (const [u, t] of [[diogo, '(21) 99100-0001'], [marcelo, '(21) 99100-0002'], [rodUser, '(21) 99100-0003'], [camUser, '(21) 99100-0004']]) await query('UPDATE usuarios SET telefone = $1 WHERE id = $2', [t, u.id]);
     // localização das obras (mapa)
     for (const [obra, lat, lng] of [[O.a, -23.0087, -43.3752], [O.b, -23.0172, -43.4571], [O.c, -22.9601, -44.0412], [O.d, -23.0021, -43.3665], [O.e, -22.9068, -43.1779], [O.f, -22.9382, -43.3624], [O.g, -22.9937, -43.2742]]) await query('UPDATE obras SET lat=$1, lng=$2 WHERE id=$3', [lat, lng, obra]);
 

@@ -780,16 +780,17 @@ function roadmap() {
       ${item('Painel do engenheiro', 'alertas do dia (ex.: hoje chega o caminhão de cimento) e avisos da gestão')}
       ${item('Financeiro por obra', 'caixa diário, medições, custo orçado × realizado, Excel mensal, patrimônio em equipamentos')}
       ${item('Comercial e marketing', 'CRM, orçamentos com follow-up, cobrança, campanhas e origem dos clientes')}
-      ${item('Sócios e investidores', 'quadro societário, painel do investidor e relatório mensal em PDF')}</ul></div>
+      ${item('Sócios e investidores', 'quadro societário, painel do investidor e relatório mensal em PDF')}
+      ${item('Fotos, Modo Campo e PWA', 'fotos por etapa, tela do canteiro e app instalável no celular')}
+      ${item('Curva S, SPI/CPI e custo por etapa', 'previsto × realizado, aditivos, fluxo de caixa projetado e folha de diárias')}
+      ${item('Compras', 'cotação com 3 fornecedores e aprovação da gestão acima do limite')}
+      ${item('Pendências, segurança do trabalho e relatórios em PDF', 'termo de entrega, NR-18/NR-35, EPI, inspeções, diário de obra')}
+      ${item('Portal do cliente e mapa de obras', 'acompanhamento pelo cliente e todas as obras no mapa')}
+      ${item('Importação de planilhas e avisos por WhatsApp', 'CSV de funcionários e fornecedores; fila diária de alertas (envio automático depende de provedor contratado)')}</ul></div>
     <div class="card"><h2>Próximos passos sugeridos</h2><ul>
       ${item('Aplicativo no celular do mestre de obras', 'presença, fotos da obra e diário direto do canteiro')}
-      ${item('Fotos e vídeos da obra', 'galeria por etapa para mostrar o andamento ao cliente')}
-      ${item('Portal do cliente', 'o cliente acompanha o avanço da obra e as medições')}
-      ${item('Notificações por WhatsApp', 'avisar o engenheiro da entrega de material e de documentos vencendo')}
-      ${item('Curva S e orçamento detalhado (SINAPI)', 'planilha de composição de custos por etapa e previsto × realizado')}
-      ${item('Folha e diárias automáticas', 'calcular diárias a partir da presença e gerar o pagamento semanal')}
-      ${item('Cotação de materiais', 'pedir preço a 3 fornecedores e comparar')}
-      ${item('Mapa das obras', 'todas as obras no mapa do Rio com status e equipe')}
+      ${item('Envio automático de WhatsApp', 'contratar o provedor e ligar o webhook (a fila já existe)')}
+      ${item('Orçamento detalhado (SINAPI)', 'composição de custos por serviço com base de preços oficial')}
       ${item('Emissão de nota fiscal e integração contábil', 'exportar para o contador')}
       ${item('Backup automático', 'cópia diária do banco')}</ul></div>`;
 }

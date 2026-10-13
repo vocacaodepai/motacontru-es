@@ -167,4 +167,87 @@ export function instalar(U) {
     }));
   }
   rotas.portal = portal;
+
+  // =====================================================================
+  // Mapa de obras
+  // =====================================================================
+  const COR_STATUS = { em_andamento: '#c2570a', planejamento: '#2b6cb0', pausada: '#b7791f', concluida: '#2f855a', cancelada: '#718096' };
+  let leafletPromessa;
+  const carregarLeaflet = () => (leafletPromessa ??= new Promise((ok, falha) => {
+    if (window.L) return ok(window.L);
+    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css'; document.head.appendChild(css);
+    const js = document.createElement('script'); js.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js'; js.onload = () => ok(window.L); js.onerror = () => falha(new Error('sem rede')); document.head.appendChild(js);
+    setTimeout(() => falha(new Error('tempo esgotado')), 6000);
+  }));
+  async function mapa() {
+    const obras = await api('/api/obras'), adm = ehAdmin();
+    const com = obras.filter((o) => o.lat != null && o.lng != null), sem = obras.filter((o) => o.lat == null || o.lng == null);
+    const { STATUS_OBRA } = U.obrasUtil;
+    $app.innerHTML = `<h1>Mapa de obras</h1><p class="sub">Onde cada obra está, com a situação e o avanço. Clique em um ponto para abrir a obra.</p>
+      <div class="card"><div id="mapa-el" style="height:420px;border-radius:10px;overflow:hidden;background:var(--bg2,#eef0f3)"></div>
+        <p class="legenda">${Object.entries(COR_STATUS).filter(([k]) => STATUS_OBRA[k]).map(([k, c]) => `<span class="sw" style="background:${c}"></span>${esc(STATUS_OBRA[k])}&nbsp;&nbsp;`).join('')}</p></div>
+      <div class="card"><h2>Obras</h2><div class="tbl"><table><thead><tr><th>Obra</th><th>Local</th><th class="n">Avanço</th><th></th></tr></thead><tbody>${obras.map((o) => `<tr><td><a href="#obras" data-obra="${o.id}">${esc(o.codigo)} · ${esc(o.nome)}</a></td>
+        <td>${esc([o.bairro, o.cidade].filter(Boolean).join(' · '))}</td><td class="n">${o.progresso}%</td>
+        <td class="n">${adm ? `<button class="mini sec" data-loc="${o.id}">${o.lat != null ? 'Ajustar local' : 'Definir local'}</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
+        ${sem.length ? `<p class="legenda aviso-vivo">${sem.length} obra(s) sem coordenadas — não aparecem no mapa.${adm ? ' Use “Definir local” (dica: no Google Maps, clique com o botão direito no ponto e copie as coordenadas).' : ''}</p>` : ''}</div>`;
+    const alvo = document.getElementById('mapa-el');
+    const abrirObra = (id) => { state.obraId = id; state.obAba = 'resumo'; if (location.hash !== '#obras') location.hash = '#obras'; else rotas.obras(); };
+    $app.querySelectorAll('[data-obra]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); abrirObra(+a.dataset.obra); }));
+    $app.querySelectorAll('[data-loc]').forEach((b) => (b.onclick = () => {
+      const o = obras.find((x) => x.id === +b.dataset.loc);
+      const m = modal(`<h2>Local da obra</h2><p class="legenda">${esc(o.nome)}</p><form class="form" id="fl" style="grid-template-columns:1fr 1fr"><div><label>Latitude</label><input name="lat" value="${o.lat ?? ''}" placeholder="-23.0087"></div><div><label>Longitude</label><input name="lng" value="${o.lng ?? ''}" placeholder="-43.3752"></div></form>
+        <div class="modal-acoes"><span style="flex:1"></span><button class="sec" id="x">Cancelar</button><button id="ok">Salvar</button></div>`, 440);
+      m.el.querySelector('#x').onclick = m.fechar;
+      m.el.querySelector('#ok').onclick = () => acao(async () => { await api(`/api/obras/${o.id}/local`, { method: 'PUT', body: Object.fromEntries(new FormData(m.el.querySelector('#fl'))) }); m.fechar(); await mapa(); }, 'Local salvo');
+    }));
+    const popup = (o) => `<b>${esc(o.nome)}</b><br>${esc(STATUS_OBRA[o.status] || o.status)} · ${o.progresso}%<br><a href="#" data-abrir="${o.id}">Abrir obra</a>`;
+    try {
+      const L = await carregarLeaflet();
+      const mp = L.map(alvo, { scrollWheelZoom: false });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(mp);
+      const pts = com.map((o) => { const c = L.circleMarker([+o.lat, +o.lng], { radius: 9, color: '#fff', weight: 2, fillColor: COR_STATUS[o.status] || '#718096', fillOpacity: 0.95 }).addTo(mp).bindPopup(popup(o)); return [+o.lat, +o.lng, c]; });
+      pts.length ? mp.fitBounds(pts.map((p) => [p[0], p[1]]), { padding: [40, 40], maxZoom: 13 }) : mp.setView([-22.95, -43.4], 10);
+      mp.on('popupopen', (e) => e.popup.getElement().querySelector('[data-abrir]')?.addEventListener('click', (ev) => { ev.preventDefault(); abrirObra(+ev.target.dataset.abrir); }));
+    } catch {
+      // sem internet para carregar o mapa: mostra os pontos num esquema simples
+      if (!com.length) { alvo.innerHTML = '<p class="mut" style="padding:20px">Nenhuma obra com coordenadas.</p>'; return; }
+      const la = com.map((o) => +o.lat), lo = com.map((o) => +o.lng), [a0, a1] = [Math.min(...la), Math.max(...la)], [b0, b1] = [Math.min(...lo), Math.max(...lo)];
+      const X = (v) => 40 + ((v - b0) / Math.max(1e-6, b1 - b0)) * 620, Y = (v) => 380 - ((v - a0) / Math.max(1e-6, a1 - a0)) * 340;
+      alvo.innerHTML = `<svg viewBox="0 0 700 420" style="width:100%;height:100%"><rect width="700" height="420" fill="none"/>${com.map((o) => `<g><circle cx="${X(+o.lng)}" cy="${Y(+o.lat)}" r="10" fill="${COR_STATUS[o.status] || '#718096'}" stroke="#fff" stroke-width="2"/><text x="${X(+o.lng) + 14}" y="${Y(+o.lat) + 4}" font-size="12" fill="currentColor">${esc(o.codigo)}</text></g>`).join('')}</svg>`;
+    }
+  }
+  rotas.mapa = mapa;
+
+  // =====================================================================
+  // Importar planilhas e avisos por WhatsApp
+  // =====================================================================
+  const ST_FILA = { pendente: ['aviso', 'Na fila'], enviado: ['ok', 'Enviado'], erro: ['ruim', 'Erro'], sem_telefone: ['ruim', 'Sem telefone'] };
+  async function importar() {
+    const adm = ehAdmin(), zap = adm ? await api('/api/avisos-whatsapp') : null;
+    $app.innerHTML = `<h1>Importar planilhas e avisos</h1><p class="sub">Traga os dados que a empresa já tem em Excel e configure os avisos por WhatsApp.</p>
+      <div class="grid dois">${[['funcionarios', 'Funcionários'], ['fornecedores', 'Fornecedores']].map(([t, r]) => `<div class="card"><h2>Importar ${r}</h2>
+        <p class="legenda aviso-vivo">1) Baixe o modelo, 2) preencha no Excel e salve como CSV, 3) envie aqui. Você vê a prévia antes de gravar; se alguma linha tiver erro, nada é importado.</p>
+        <div class="fu-acoes"><a class="btn sec" href="/api/importar/${t}/modelo.csv">${ico('download')} Baixar modelo</a><label class="btn" style="cursor:pointer">Escolher arquivo<input type="file" accept=".csv,text/csv" data-imp="${t}" hidden></label></div><div id="prev-${t}" style="margin-top:12px"></div></div>`).join('')}</div>
+      ${adm ? `<div class="card"><div class="titulo-saldos"><h2>Avisos por WhatsApp</h2><div class="fu-acoes"><button class="sec" id="gerar">Gerar avisos de hoje</button><button id="enviar" ${zap.configurado ? '' : 'disabled title="Configure o provedor para envio automático"'}>Enviar pendentes</button></div></div>
+        <p class="legenda aviso-vivo">Todo dia o sistema monta os avisos urgentes (entrega hoje, concretagem, documento vencido, compra para aprovar…) de cada engenheiro e da gestão. ${zap.configurado ? 'O envio automático está <b>ativo</b>.' : 'O envio automático ainda <b>não está configurado</b>: enquanto isso, use o botão “Enviar pelo WhatsApp” de cada aviso.'}</p>
+        <h3>Telefones</h3><div class="tbl"><table><thead><tr><th>Pessoa</th><th>WhatsApp</th><th></th></tr></thead><tbody>${zap.usuarios.map((u) => `<tr><td>${esc(u.nome)} <span class="mut">(${esc(u.papel)})</span></td><td><input data-tel="${u.id}" value="${esc(u.telefone || '')}" placeholder="(21) 99999-0000" style="max-width:200px"></td><td class="n"><button class="mini sec" data-salvatel="${u.id}">Salvar</button></td></tr>`).join('')}</tbody></table></div>
+        <h3 style="margin-top:16px">Fila de avisos</h3>${zap.fila.length ? `<div class="tbl"><table><thead><tr><th>Para</th><th>Aviso</th><th>Situação</th><th></th></tr></thead><tbody>${zap.fila.map((f) => `<tr><td>${esc(f.nome || '—')}</td><td style="white-space:pre-line">${esc(f.texto)}</td><td><span class="tag ${ST_FILA[f.status][0]}">${ST_FILA[f.status][1]}</span>${f.erro ? `<br><small class="mut">${esc(f.erro)}</small>` : ''}</td>
+          <td class="n">${f.link && f.status !== 'enviado' ? `<a class="mini" target="_blank" rel="noopener" href="${f.link}" data-env="${f.id}">Enviar pelo WhatsApp</a>` : ''}</td></tr>`).join('')}</tbody></table></div>` : vazio('Nenhum aviso na fila. Clique em “Gerar avisos de hoje”.')}</div>` : ''}`;
+    $app.querySelectorAll('[data-imp]').forEach((inp) => (inp.onchange = async () => {
+      const tipo = inp.dataset.imp, box = document.getElementById('prev-' + tipo), arq = inp.files[0]; if (!arq) return;
+      const csv = await arq.text(); inp.value = '';
+      const mostrar = (r) => {
+        box.innerHTML = `<p><b>${r.total}</b> linha(s): <span class="pos">${r.validas} válida(s)</span>${r.com_erro ? `, <span class="neg">${r.com_erro} com erro</span>` : ''}.${r.ignoradas?.length ? ` <small class="mut">Colunas ignoradas: ${esc(r.ignoradas.join(', '))}.</small>` : ''}</p>
+          <div class="tbl" style="max-height:220px;overflow:auto"><table><tbody>${r.linhas.map((l) => `<tr><td>${l.n}</td><td>${esc(l.nome || '—')}</td><td>${l.ok ? '<span class="tag ok">OK</span>' : `<span class="tag ruim">${esc(l.erro)}</span>`}</td></tr>`).join('')}</tbody></table></div>
+          ${r.confirmado ? '<p class="pos"><b>Importação concluída.</b></p>' : r.com_erro ? '<p class="mut">Corrija as linhas com erro na planilha e envie de novo.</p>' : '<div class="fu-acoes" style="margin-top:8px"><button id="conf-' + tipo + '">Confirmar importação</button></div>'}`;
+        box.querySelector('#conf-' + tipo)?.addEventListener('click', () => acao(async () => mostrar(await api('/api/importar/' + tipo, { method: 'POST', body: { csv, confirmar: true } })), 'Planilha importada'));
+      };
+      await acao(async () => mostrar(await api('/api/importar/' + tipo, { method: 'POST', body: { csv, confirmar: false } })));
+    }));
+    $app.querySelector('#gerar')?.addEventListener('click', () => acao(async () => { const r = await api('/api/avisos-whatsapp/gerar', { method: 'POST' }); toast(`${r.novos} aviso(s) novo(s) na fila`); await importar(); }));
+    $app.querySelector('#enviar')?.addEventListener('click', () => acao(async () => { const r = await api('/api/avisos-whatsapp/enviar', { method: 'POST' }); toast(r.motivo || `${r.enviados} enviado(s), ${r.erros} com erro`); await importar(); }));
+    $app.querySelectorAll('[data-salvatel]').forEach((b) => (b.onclick = () => acao(async () => { await api(`/api/usuarios/${b.dataset.salvatel}/telefone`, { method: 'PUT', body: { telefone: $app.querySelector(`[data-tel="${b.dataset.salvatel}"]`).value } }); await importar(); }, 'Telefone salvo')));
+    $app.querySelectorAll('[data-env]').forEach((a) => a.addEventListener('click', () => setTimeout(() => api(`/api/avisos-whatsapp/${a.dataset.env}/enviado`, { method: 'POST' }).then(importar).catch(() => {}), 600)));
+  }
+  rotas.importar = importar;
 }

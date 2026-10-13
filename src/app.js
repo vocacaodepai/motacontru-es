@@ -28,6 +28,8 @@ import * as FO from './folha.js';
 import * as QU from './qualidade.js';
 import * as RL from './relatorios.js';
 import * as PT from './portal.js';
+import * as IM from './importacao.js';
+import * as NT from './notificacoes.js';
 import { gerarPdf } from './relatorio.js';
 
 export const app = express();
@@ -39,6 +41,7 @@ app.post('/api/obras/:id/documentos', express.json({ limit: '5mb' })); // docume
 app.post('/api/obras/:id/fotos', express.json({ limit: '3mb' })); // foto já reduzida no navegador + miniatura (base64)
 app.post('/api/marca/logo', express.json({ limit: '600kb' }));
 app.post('/api/auth/foto', express.json({ limit: '300kb' })); // foto de perfil já reduzida no navegador
+app.post('/api/importar/:tipo', express.json({ limit: '600kb' }));
 app.use(express.json({ limit: '100kb' }));
 app.use((_, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -57,6 +60,12 @@ const h = (fn) => (req, res, next) => Promise.resolve().then(() => fn(req, res))
 
 // ---------- autenticação ----------
 const ip = (req) => req.ip || req.socket.remoteAddress || '';
+// Rotina diária (Vercel Cron ou agendador externo): monta e envia os avisos de WhatsApp. Protegida por CRON_SECRET.
+app.get('/api/cron/avisos', h(async (req, res) => {
+  const segredo = process.env.CRON_SECRET;
+  if (!segredo || req.headers.authorization !== `Bearer ${segredo}`) return res.status(401).json({ erro: 'Não autorizado.' });
+  res.json(await NT.rodarCron());
+}));
 app.use('/api', A.autenticar);
 app.use('/api', AU.middleware); // histórico de alterações (quem mudou o quê)
 
@@ -328,6 +337,17 @@ app.get('/api/portal', verPortal, h(async (req, res) => res.json(await PT.portal
 app.get('/api/obras/:id/acessos-cliente', admin, h(async (req, res) => res.json(await PT.acessosDaObra(idNum(req.params.id)))));
 app.post('/api/obras/:id/acessos-cliente', admin, h(async (req, res) => res.status(201).json(await PT.criarAcesso(req.usuario, { ...req.body, obra_ids: [idNum(req.params.id)] }))));
 app.delete('/api/obras/:id/acessos-cliente/:u', admin, h(async (req, res) => { await PT.removerAcesso(req.usuario, idNum(req.params.id), idNum(req.params.u)); res.status(204).end(); }));
+
+// ---------- mapa, importação de planilhas e avisos por WhatsApp ----------
+const verMapa = A.exigirArea('mapa'), verImportar = A.exigirArea('importar');
+app.put('/api/obras/:id/local', verObras, h(async (req, res) => { await OB.definirLocal(req.usuario, idNum(req.params.id), req.body); res.status(204).end(); }));
+app.get('/api/importar/:tipo/modelo.csv', verImportar, h(async (req, res) => { res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="modelo-${req.params.tipo}.csv"`); res.end(IM.modeloCsv(req.params.tipo)); }));
+app.post('/api/importar/:tipo', verImportar, admin, h(async (req, res) => res.json(await IM.processar(req.params.tipo, req.body.csv, req.body.confirmar === true))));
+app.get('/api/avisos-whatsapp', verImportar, admin, h(async (_, res) => res.json(await NT.painel())));
+app.post('/api/avisos-whatsapp/gerar', verImportar, admin, h(async (_, res) => res.json(await NT.gerarFila())));
+app.post('/api/avisos-whatsapp/enviar', verImportar, admin, h(async (_, res) => res.json(await NT.enviarPendentes())));
+app.post('/api/avisos-whatsapp/:id/enviado', verImportar, admin, h(async (req, res) => { await NT.marcarEnviado(idNum(req.params.id)); res.status(204).end(); }));
+app.put('/api/usuarios/:id/telefone', admin, h(async (req, res) => { await NT.definirTelefone(req.usuario, idNum(req.params.id), req.body.telefone); res.status(204).end(); }));
 
 // ---------- indicadores, aditivos, compras, cotações e folha ----------
 const verFluxo = A.exigirArea('fluxocaixa'), verFolha = A.exigirArea('folha');

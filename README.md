@@ -13,6 +13,16 @@ Nasceu do dashboard da OnTrade (mesma base: Node + Express + PostgreSQL, interfa
 | **Painel do Investidor** | Capital aportado, carteira contratada, margem e retorno sobre o custo, recebimentos futuros, parte de cada sócio, pipeline comercial, PDF mensal aos sócios |
 | **Meu Dia (engenheiro)** | Alertas ("hoje chega o caminhão de cimento", entrega atrasada, etapa atrasada, documento vencendo), avisos da gestão, agenda e as obras dele |
 | **Obras** | Lista com fase atual, prazo, equipe do dia e custo × orçado. Em cada obra: Resumo, **Cronograma (Gantt)**, **Equipe e presença**, **Materiais**, **Terceirizadas**, **Documentação**, **Diário de obra**, **Agenda** e **Financeiro** (medições, custos por categoria) |
+| **Curva S e indicadores** | Avanço planejado × realizado, SPI/CPI, custo por etapa, previsão de custo final, aditivos de contrato, fluxo de caixa projetado (13 semanas), folha de diárias |
+| **Fotos e Modo Campo** | Fotos por etapa (reduzidas no celular), tela simples para o mestre/engenheiro no canteiro, PWA instalável |
+| **Pendências e termo de entrega** | Lista de vistoria por obra e termo de entrega em PDF |
+| **Segurança do trabalho** | Treinamentos (NR-18, NR-35…), entrega de EPI, inspeção por checklist e alertas do que vence |
+| **Relatórios em PDF** | Relatório da obra (cliente, sem custos, ou interno), diário de obra (RDO) e termo de entrega |
+| **Portal do cliente** | Login próprio: o cliente vê só a obra dele (avanço, fotos liberadas, medições, pendências), sem custos nem equipe |
+| **Mapa de obras** | Todas as obras no mapa (OpenStreetMap) com situação e avanço |
+| **Importar planilhas** | Funcionários e fornecedores por CSV, com modelo e prévia antes de gravar |
+| **Avisos por WhatsApp** | Fila diária de alertas urgentes por pessoa; link wa.me ou envio automático por provedor (ver abaixo) |
+| **Marca e Histórico** | Nome, cor e logo da empresa; quem alterou o quê e quando |
 | **Agenda** | Calendário do mês com entregas, concretagens, vistorias, reuniões, fim de etapas e medições |
 | **Materiais** | Pedido → entrega → aplicado, por obra e fornecedor; "pagar" lança a saída no caixa ligada à obra (sem custo em dobro) |
 | **Terceirizadas** | Empresas de LED, piscina, elétrica, esquadrias… com contrato por obra, valor pago, nota, certidões e seguro |
@@ -58,6 +68,8 @@ Requer Node ≥ 22. Sem configuração o sistema usa um Postgres embutido (PGlit
 | Júlia Andrade | `julia.comercial` | Comercial |
 | Investidor Exemplo | `investidor` | Sócio / investidor |
 | Pedro Lacerda | `pedro.estoque` | Almoxarifado |
+| Marina Albuquerque | `cliente.albuquerque` | Cliente (obra Alphaville) |
+| Roberto Vista Mar | `cliente.vistamar` | Cliente (Cobertura Barra) |
 | Bianca Freitas | `bianca.marketing` | Marketing |
 
 Para trocar a senha da demonstração: `DEMO_SENHA=outra-senha`. **Não deixe dados de demonstração e senha conhecida em um endereço público de verdade.**
@@ -68,6 +80,15 @@ Para trocar a senha da demonstração: `DEMO_SENHA=outra-senha`. **Não deixe da
 2. **Vercel → Environment Variables:** `DATABASE_URL` (Transaction pooler do Supabase), `SETUP_TOKEN` (código para criar o 1º administrador) e, opcional, `ANTHROPIC_API_KEY` (extratos em PDF/foto).
 3. **Demonstração no Supabase:** rode **uma vez, no seu computador** `DATABASE_URL="..." npm run demo` (evita timeout da função na Vercel).
 4. Faça o deploy. Em produção real, use banco limpo (sem `npm run demo`) e crie o administrador pela tela de primeiro acesso.
+
+### Avisos por WhatsApp (envio automático)
+
+O sistema já monta a fila diária; sem provedor, cada aviso tem um botão “Enviar pelo WhatsApp” (link wa.me). Para envio automático contrate um provedor de API de WhatsApp (ex.: Z-API, Evolution API, Twilio, Meta Cloud API) e aponte para um webhook que aceite `POST {to, text}`:
+
+- `WHATSAPP_WEBHOOK_URL` — endereço do provedor/automação (n8n, Make…). `WHATSAPP_TOKEN` — opcional, enviado como `Bearer`.
+- `CRON_SECRET` — segredo da rotina diária `GET /api/cron/avisos` (a Vercel chama às 7h de Brasília, ver `vercel.json`, enviando `Authorization: Bearer <CRON_SECRET>`).
+- Cadastre o telefone de cada pessoa em **Importar Planilhas → Avisos por WhatsApp**.
+- Sem essas credenciais reais, o envio automático **não funciona** (o fluxo é testado com um provedor simulado).
 
 ## Estrutura
 
