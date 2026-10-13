@@ -56,6 +56,7 @@ export function instalar(U) {
   const mapaUrl = (o) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([o.endereco, o.bairro, o.cidade, o.uf].filter(Boolean).join(', '))}`;
   const vazio = (txt) => `<p class="mut">${txt}</p>`;
   const opcoesObra = async () => (state.obOpc = await api('/api/obras/opcoes'));
+  U.extraAbas = []; // [chave, rótulo, função(el, dados, recarrega, hoje), soGestao] — registradas por outros módulos
   U.obrasUtil = { STATUS_OBRA, TAG_STATUS, tagStatus, tagRitmo, barraProg, diasTxt, somaDias, diaSem, qtd, mapaUrl, TIPO_EVENTO, sitDoc, SIT_DOC };
 
   function abrirObra(id, aba) { state.obraId = id; state.obAba = aba || 'resumo'; if (location.hash !== '#obras') location.hash = '#obras'; else rotas.obras(); }
@@ -138,7 +139,7 @@ export function instalar(U) {
     let d;
     try { d = await api(`/api/obras/${id}`); } catch (e) { state.obraId = null; toast(e.message, true); return rotas.obras(); }
     const o = d.obra, eng = ehEng(), aba = state.obAba || 'resumo';
-    const abas = ABAS.filter(([k]) => !(eng && k === 'financeiro'));
+    const abas = [...ABAS, ...U.extraAbas].filter(([k, , , soGestao]) => !(eng && (k === 'financeiro' || soGestao)));
     const H = d.hoje;
     $app.innerHTML = `<a href="#obras" class="voltar" id="voltar">${ico('arrow-left')} Todas as obras</a>
       <div class="topo-vivo"><div><h1>${esc(o.nome)}</h1>
@@ -160,7 +161,8 @@ export function instalar(U) {
     document.getElementById('aviso')?.addEventListener('click', () => janelaAviso(o.id));
     const recarrega = () => obraDetalhe(id);
     const corpo = document.getElementById('aba-corpo');
-    const abaFn = { resumo: abaResumo, cronograma: abaCronograma, equipe: abaEquipe, materiais: abaMateriais, terceiros: abaTerceiros, documentos: abaDocumentos, diario: abaDiario, agenda: abaAgenda, financeiro: abaFinanceiro }[eng && aba === 'financeiro' ? 'resumo' : aba];
+    const extra = U.extraAbas.find(([k, , , soGestao]) => k === aba && !(eng && soGestao));
+    const abaFn = extra ? extra[2] : { resumo: abaResumo, cronograma: abaCronograma, equipe: abaEquipe, materiais: abaMateriais, terceiros: abaTerceiros, documentos: abaDocumentos, diario: abaDiario, agenda: abaAgenda, financeiro: abaFinanceiro }[eng && aba === 'financeiro' ? 'resumo' : aba] || abaResumo;
     await abaFn(corpo, d, recarrega, H);
     ligaLinksObra(corpo);
   }
@@ -279,6 +281,8 @@ export function instalar(U) {
     };
     await carrega();
   }
+
+  U.janelaPresenca = janelaPresenca;
 
   // ---------- aba: materiais da obra ----------
   async function abaMateriais(el, d, recarrega) {

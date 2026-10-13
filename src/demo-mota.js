@@ -14,6 +14,8 @@ import * as ES from './estoque.js';
 import * as DP from './dp.js';
 import * as P from './patrimonio.js';
 import * as CB from './cobranca.js';
+import * as FT from './fotos.js';
+import { fotoDemo } from './demo-fotos.js';
 
 // sorteio repetível: a demonstração sai igual toda vez
 function rng(seed) { return () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
@@ -397,6 +399,27 @@ export async function popularDemo() {
     await doc(O.f, 'MATRICULA', 'emitido', { ...emit('Matrícula 998877', null, -90), emissor_externo: '10º Ofício de Registro de Imóveis' });
     await doc(O.f, 'PROJETO_APROVADO', 'solicitado', { obs: 'Projeto protocolado na Prefeitura.' });
     await DC.salvarDocumento(admin, O.g, { tipo: 'HABITESE', status: 'emitido', numero: 'Habite-se 2026/501', emitido_em: d(-52), emissor_externo: 'Prefeitura do Rio (SMU)' });
+
+    // ---------- fotos ilustrativas por obra e etapa + histórico de alterações ----------
+    const FOTOS = [[O.a, 58, 170, ['Escavação e gabarito', 'Fundação concluída', 'Estrutura do térreo', 'Laje do 1º pavimento', 'Alvenaria e instalações']], [O.b, 29, 80, ['Limpeza e locação', 'Escavação das sapatas', 'Armação das vigas baldrame']],
+      [O.c, 41, 210, ['Mobilização do canteiro', 'Drenagem — quadra 1', 'Pavimentação da via principal', 'Rede de água em execução']], [O.d, 84, 105, ['Escavação da piscina', 'Estrutura e armação', 'Casa de máquinas', 'Revestimento em andamento']],
+      [O.e, 40, 52, ['Montagem do andaime', 'Preparo da fachada', 'Revestimento do 2º pavimento']], [O.g, 100, 360, ['Obra no início', 'Estrutura pronta', 'Acabamento final', 'Entrega ao cliente']]];
+    let semente = 1;
+    for (const [obra, alvo, dias, legendas] of FOTOS) {
+      const fases = await query('SELECT id FROM obra_fases WHERE obra_id = $1 ORDER BY ordem', [obra]);
+      for (const [i, leg] of legendas.entries()) {
+        const f = (i + 1) / legendas.length, quando = obra === O.g ? -300 + Math.round(f * 230) : -Math.max(1, Math.round(dias * (1 - f))) + 1;
+        await FT.adicionar({ id: usuarioPorObra[obra] || diogo.id, papel: 'admin' }, obra, { ...fotoDemo(Math.round(alvo * f), semente++), legenda: leg, data: d(Math.min(0, quando)), fase_id: fases[Math.min(fases.length - 1, Math.floor(f * fases.length * (alvo / 100)))]?.id ?? null, visivel_cliente: i % 2 === 0 });
+      }
+    }
+    const aud = (u, acao, detalhe, obra, diasAtras, h) => query("INSERT INTO auditoria (usuario_id, usuario_nome, papel, metodo, rota, acao, obra_id, detalhe, em) VALUES ($1,$2,$3,'POST','/api/demo',$4,$5,$6,$7::timestamp)", [u.id, u.nome, u.papel, acao, obra, detalhe, `${d(-diasAtras)} ${h}`]);
+    const rodU = { id: rodUser.id, nome: rodUser.nome, papel: 'engenheiro' }, camU = { id: camUser.id, nome: camUser.nome, papel: 'engenheiro' }, anaU = { id: ana.id, nome: ana.nome, papel: 'financeiro' }, marU = { id: marcelo.id, nome: marcelo.nome, papel: 'admin' };
+    for (const [u, acao, det, obra, dias, hora] of [
+      [rodU, 'Atualizou etapa', 'progresso: 55', O.a, 0, '07:42:10'], [rodU, 'Criou diário de obra', 'atividades: Concretagem da laje...', O.a, 1, '17:20:44'], [camU, 'Criou presença', null, O.c, 1, '07:15:03'], [rodU, 'Criou foto', 'legenda: Alvenaria e instalações', O.a, 1, '16:02:51'],
+      [admin, 'Criou aviso', 'titulo: Hoje chega o caminhão de concreto às 8h', O.a, 1, '18:05:12'], [anaU, 'Pagou material', null, O.b, 2, '10:31:08'], [camU, 'Criou material', 'descricao: Tubo PVC esgoto 100 mm', O.c, 3, '14:11:30'], [marU, 'Criou contrato de terceirizada', 'escopo: Instalação do painel de LED...', O.e, 4, '09:20:15'],
+      [anaU, 'Recebeu medição', null, O.a, 9, '11:02:47'], [admin, 'Alterou obra', 'status: em_andamento', O.d, 10, '08:45:00'], [rodU, 'Criou documento', 'tipo: ART', O.b, 12, '15:40:22'], [admin, 'Criou aditivo de contrato', null, O.c, 15, '16:55:09'],
+      [camU, 'Alterou documento', 'tipo: ALVARA', O.d, 20, '13:25:40'], [marU, 'Criou fornecedor', 'nome: Casa do Acabamento Recreio (exemplo)', null, 25, '09:10:31'], [anaU, 'Criou lançamento', 'valor: R$ 12.500,00', null, 30, '10:22:19'],
+    ]) await aud(u, acao, det, obra, dias, hora);
 
     // ---------- agenda e avisos ----------
     const evento = (obra, dias, hora, tipo, titulo, detalhe) => OB.salvarEvento({ id: diogo.id, papel: 'admin' }, obra, null, { data: d(dias), hora, tipo, titulo, detalhe });

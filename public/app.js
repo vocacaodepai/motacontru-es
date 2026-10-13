@@ -105,8 +105,8 @@ function abrirFoto() {
   m.el.querySelector('#fs').onclick = () => acao(async () => { await api('/api/auth/foto', { method: 'POST', body: { imagem: recorte(256) } }); await atualizar(); }, 'Foto salva');
   m.el.querySelector('#fr').onclick = () => acao(async () => { await api('/api/auth/foto', { method: 'DELETE' }); await atualizar(); }, 'Foto removida');
 }
-const NIVEL = { comercial: 0, marketing: 0, engenheiro: 0, leitor: 1, socio: 1, operador: 2, admin: 3 };
-const PAPEL_NOME = { admin: 'Administrador', operador: 'Operador', leitor: 'Somente leitura', socio: 'Sócio', comercial: 'Comercial', marketing: 'Marketing', financeiro: 'Financeiro', estoque: 'Almoxarifado', engenheiro: 'Engenheiro(a)' };
+const NIVEL = { comercial: 0, marketing: 0, engenheiro: 0, cliente: 0, leitor: 1, socio: 1, operador: 2, admin: 3 };
+const PAPEL_NOME = { admin: 'Administrador', operador: 'Operador', leitor: 'Somente leitura', socio: 'Sócio', comercial: 'Comercial', marketing: 'Marketing', financeiro: 'Financeiro', estoque: 'Almoxarifado', engenheiro: 'Engenheiro(a)', cliente: 'Cliente' };
 const temArea = (a) => !!state.usuario?.areas?.includes(a);
 const pode = (papel) => !!state.usuario && NIVEL[state.usuario.papel] >= NIVEL[papel];
 
@@ -161,8 +161,8 @@ function telaLogin(e) {
   desenharTema();
   const primeiro = e?.precisaCriarAdmin;
   $app.innerHTML = `<form class="card login" id="lg">
-    <img src="logo.png" alt="Mota Construções" class="logo-login" onerror="this.remove()">
-    <h1>Mota Construções</h1>
+    <img src="/api/marca/logo?v=${state.marcaV || 0}" alt="Logo" class="logo-login" onerror="this.remove()">
+    <h1>${esc(state.marcaNome || 'Mota Construções')}</h1>
     <p class="sub">${primeiro ? 'Primeiro acesso: crie o administrador (sócio ou responsável).' : 'Entre com seu e-mail ou ID e a senha.'}</p>
     ${primeiro ? '<div><label>Nome</label><input name="nome" required autocomplete="name"></div>' : ''}
     <div><label>${primeiro ? 'E-mail' : 'E-mail ou ID'}</label><input name="email" type="${primeiro ? 'email' : 'text'}" required autocomplete="username" autocapitalize="none" spellcheck="false"></div>
@@ -184,18 +184,19 @@ document.getElementById('sair').onclick = sair;
 const rotas = { painel, lancar, fechar, extratos, mensal, patrimonio, societario, dp, marketing, perfil, comercial, aovivo, orcamentos, clientes, cobranca, acessos, followup, estoque, fluxo, cadastros, roadmap };
 // Menu lateral por área. Cada item só aparece se o perfil tem acesso E a página existe (as telas de obra são registradas por obras.js e gestao.js).
 const MENU = [
-  ['Gestão', [['visao', 'Visão Geral'], ['investidor', 'Painel do Investidor'], ['engenheiro', 'Meu Dia']]],
-  ['Obras', [['obras', 'Obras'], ['agenda', 'Agenda'], ['materiais', 'Materiais'], ['terceiros', 'Terceirizadas'], ['documentos', 'Documentação']]],
+  ['Gestão', [['visao', 'Visão Geral'], ['investidor', 'Painel do Investidor'], ['fluxocaixa', 'Fluxo de Caixa'], ['engenheiro', 'Meu Dia'], ['campo', 'Modo Campo']]],
+  ['Obras', [['obras', 'Obras'], ['mapa', 'Mapa'], ['agenda', 'Agenda'], ['materiais', 'Materiais e Compras'], ['terceiros', 'Terceirizadas'], ['documentos', 'Documentação'], ['seguranca', 'Segurança do Trabalho'], ['folha', 'Folha de Diárias']]],
+  ['Minha obra', [['portal', 'Acompanhar a Obra']]],
   ['Financeiro', [['painel', 'Painel'], ['lancar', 'Lançar'], ['fechar', 'Fechar o Dia'], ['extratos', 'Extratos'], ['mensal', 'Controle Mensal'], ['patrimonio', 'Patrimônio'], ['cobranca', 'Orçamentos Aprovados']]],
   ['Comercial', [['comercial', 'Painel'], ['followup', 'Follow-up', 'comercial'], ['aovivo', 'Ao vivo'], ['orcamentos', 'Orçamentos', 'comercial'], ['clientes', 'Clientes', 'comercial']]],
   ['Marketing', [['marketing', 'Painel']]],
   ['Almoxarifado', [['estoque', 'Almoxarifado']]],
   ['Sociedade', [['societario', 'Quadro Societário']]],
   ['Pessoas', [['dp', 'Equipe e Funcionários']]],
-  ['Sistema', [['acessos', 'Acessos'], ['fluxo', 'Fluxo da Obra'], ['cadastros', 'Cadastros'], ['roadmap', 'Roadmap']]],
+  ['Sistema', [['acessos', 'Acessos'], ['historico', 'Histórico de Alterações'], ['marca', 'Marca e Logo'], ['importar', 'Importar Planilhas'], ['fluxo', 'Fluxo da Obra'], ['cadastros', 'Cadastros'], ['roadmap', 'Roadmap']]],
 ];
 // Primeira tela de cada perfil (quando não há um endereço escolhido)
-const INICIO = { engenheiro: 'engenheiro', financeiro: 'painel', estoque: 'estoque', comercial: 'comercial', marketing: 'marketing' };
+const INICIO = { engenheiro: 'engenheiro', cliente: 'portal', financeiro: 'painel', estoque: 'estoque', comercial: 'comercial', marketing: 'marketing' };
 const areaDaRota = (r) => MENU.flatMap(([, itens]) => itens).find(([n]) => n === r)?.[2] || r;
 const rotasPermitidas = () => MENU.flatMap(([, itens]) => itens).filter(([n, , area]) => rotas[n] && temArea(area || n)).map(([n]) => n);
 function renderMenu() {
@@ -1788,9 +1789,24 @@ async function perfil() {
   };
 }
 
+// Marca da empresa (nome, cor e logo): vem do servidor e vale para o menu, o login e o título da aba
+async function aplicarMarca() {
+  try {
+    const m = await fetch('/api/marca').then((r) => r.json());
+    state.marcaNome = m.nome; state.marcaV = m.v;
+    document.title = `${m.nome} — Gestão de Obras`;
+    document.querySelector('.marca-txt').innerHTML = `<b>${esc(m.nome.split(' ')[0])}</b> ${esc(m.nome.split(' ').slice(1).join(' '))}<small>Gestão de obras</small>`;
+    const logo = document.querySelector('.logo-menu');
+    if (m.tem_logo) { if (logo) logo.src = `/api/marca/logo?v=${m.v}`; else document.querySelector('.marca').insertAdjacentHTML('afterbegin', `<img src="/api/marca/logo?v=${m.v}" alt="Logo" class="logo-menu">`); } else if (logo) logo.remove();
+    if (m.cor) { const r = document.documentElement.style; r.setProperty('--azul', m.cor); r.setProperty('--tint', `color-mix(in srgb, ${m.cor} 10%, var(--card))`); r.setProperty('--btn', `color-mix(in srgb, ${m.cor} 55%, #1d2a36)`); }
+  } catch { /* sem marca: segue com o padrão */ }
+}
+state.aplicarMarca = () => aplicarMarca();
+
 // Telas de obra (obras.js e gestao.js): recebem os utilitários daqui e registram suas rotas
 (async () => {
   const util = { state, api, esc, brl, dataBR, nomeMes, ico, ICONES, toast, acao, modal, avatar, cls, pode, temArea, paraCentavos, brlInput, opts, MESES, hojeISO, rotas, barras, seletorMes, ligaMes, lerBase64, validarObrigatorios, ast, campo, seletor, PAPEL_NOME, rota, recarregarMeta, zap, primeiroNome };
-  for (const m of ['./obras.js', './gestao.js']) { try { (await import(m)).instalar(util); } catch (e) { console.error('Falha ao carregar', m, e); } }
+  for (const m of ['./obras.js', './gestao.js', './campo.js', './extras.js']) { try { (await import(m)).instalar(util); } catch (e) { console.error('Falha ao carregar', m, e); } }
+  await aplicarMarca();
   await rota();
 })();

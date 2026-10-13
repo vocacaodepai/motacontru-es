@@ -18,6 +18,9 @@ import * as OB from './obras.js';
 import * as MT from './materiais.js';
 import * as DC from './documentos.js';
 import * as PN from './painel.js';
+import * as AU from './auditoria.js';
+import * as MA from './marca.js';
+import * as FT from './fotos.js';
 import { gerarPdf } from './relatorio.js';
 
 export const app = express();
@@ -26,6 +29,8 @@ app.post('/api/extratos', express.json({ limit: '5mb' })); // upload em base64; 
 app.post('/api/dp/ausencias', express.json({ limit: '5mb' })); // atestado anexado em base64 (até 3 MB)
 app.post('/api/dp/ausencias/:id/anexo', express.json({ limit: '5mb' }));
 app.post('/api/obras/:id/documentos', express.json({ limit: '5mb' })); // documento da obra (ART, alvará...) anexado em base64 (até 3 MB)
+app.post('/api/obras/:id/fotos', express.json({ limit: '3mb' })); // foto já reduzida no navegador + miniatura (base64)
+app.post('/api/marca/logo', express.json({ limit: '600kb' }));
 app.post('/api/auth/foto', express.json({ limit: '300kb' })); // foto de perfil já reduzida no navegador
 app.use(express.json({ limit: '100kb' }));
 app.use((_, res, next) => {
@@ -46,6 +51,7 @@ const h = (fn) => (req, res, next) => Promise.resolve().then(() => fn(req, res))
 // ---------- autenticação ----------
 const ip = (req) => req.ip || req.socket.remoteAddress || '';
 app.use('/api', A.autenticar);
+app.use('/api', AU.middleware); // histórico de alterações (quem mudou o quê)
 
 app.get('/api/auth/estado', h(async (req, res) => res.json({ usuario: req.usuario, precisaCriarAdmin: (await A.totalUsuarios()) === 0, exigeCodigo: !!process.env.SETUP_TOKEN })));
 app.post('/api/auth/setup', h(async (req, res) => {
@@ -267,6 +273,30 @@ app.post('/api/obras/:id/materiais', verObras, h(async (req, res) => res.status(
 app.put('/api/obras/:id/materiais/:m', verObras, h(async (req, res) => res.json({ id: await MT.salvarMaterial(req.usuario, idNum(req.params.id), idNum(req.params.m), req.body) })));
 app.post('/api/obras/:id/documentos/checklist', verObras, h(async (req, res) => res.status(201).json({ criados: await DC.gerarChecklist(req.usuario, idNum(req.params.id)) })));
 app.post('/api/obras/:id/documentos', verObras, h(async (req, res) => res.status(201).json({ id: await DC.salvarDocumento(req.usuario, idNum(req.params.id), req.body) })));
+
+// ---------- marca (nome, cor e logo), histórico e fotos ----------
+app.get('/api/marca', h(async (_, res) => res.json(await MA.marca())));
+app.get('/api/marca/logo', h(async (_, res) => {
+  const l = await MA.lerLogo();
+  if (!l) return res.status(404).end();
+  res.setHeader('Content-Type', l.tipo); res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox"); // SVG nunca executa script
+  res.end(l.buf);
+}));
+app.put('/api/marca', admin, h(async (req, res) => { await MA.salvarMarca(req.body); res.json(await MA.marca()); }));
+app.post('/api/marca/logo', admin, h(async (req, res) => { await MA.salvarLogo(req.body.base64); res.json(await MA.marca()); }));
+app.delete('/api/marca/logo', admin, h(async (_, res) => { await MA.removerLogo(); res.status(204).end(); }));
+app.get('/api/historico', admin, h(async (req, res) => res.json(await AU.listar(req.query))));
+const verFoto = (req, res, next) => (!req.usuario ? res.status(401).json({ erro: 'Faça login para continuar.' }) : ['obras', 'portal'].some((a) => (A.AREAS[req.usuario.papel] || []).includes(a)) ? next() : res.status(403).json({ erro: 'Seu perfil não tem acesso a esta área.' }));
+app.get('/api/obras/:id/fotos', verObras, h(async (req, res) => res.json(await FT.listar(req.usuario, idNum(req.params.id)))));
+app.post('/api/obras/:id/fotos', verObras, h(async (req, res) => res.status(201).json({ id: await FT.adicionar(req.usuario, idNum(req.params.id), req.body) })));
+app.get('/api/fotos/:id/:tipo', verFoto, h(async (req, res) => {
+  const buf = await FT.ler(req.usuario, idNum(req.params.id), req.params.tipo === 'miniatura' ? 'miniatura' : 'dados');
+  res.setHeader('Content-Type', 'image/jpeg'); res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.end(buf);
+}));
+app.put('/api/fotos/:id', verObras, h(async (req, res) => { await FT.atualizar(req.usuario, idNum(req.params.id), req.body); res.status(204).end(); }));
+app.delete('/api/fotos/:id', verObras, h(async (req, res) => { await FT.excluir(req.usuario, idNum(req.params.id)); res.status(204).end(); }));
 
 // ---------- Marketing: campanhas, números dos anúncios e retorno ----------
 // Ver: admin, sócio e marketing. Lançar/editar: admin e marketing.

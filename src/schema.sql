@@ -809,3 +809,249 @@ ALTER TABLE obra_diario ENABLE ROW LEVEL SECURITY;
 ALTER TABLE obra_eventos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE obra_medicoes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE avisos ENABLE ROW LEVEL SECURITY;
+
+-- =====================================================================================
+-- FASE 2: marca, histórico, fotos, curva S, aditivos, compras, diárias, qualidade, segurança, portal, avisos
+-- =====================================================================================
+
+-- Perfil cliente (portal do cliente: vê só a obra dele)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'usuarios_papel_check' AND pg_get_constraintdef(oid) LIKE '%cliente%') THEN
+    ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_papel_check;
+    ALTER TABLE usuarios ADD CONSTRAINT usuarios_papel_check CHECK (papel IN ('admin','operador','leitor','socio','comercial','marketing','financeiro','estoque','engenheiro','cliente'));
+  END IF;
+END $$;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telefone text;   -- WhatsApp para avisos
+
+-- Configurações simples (limite de aprovação de compras, nome e cor da marca...) e logo
+CREATE TABLE IF NOT EXISTS configuracoes (
+  chave text PRIMARY KEY,
+  valor text,
+  atualizado_em timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'America/Sao_Paulo')
+);
+CREATE TABLE IF NOT EXISTS marca_logo (
+  id integer PRIMARY KEY CHECK (id = 1),
+  tipo text NOT NULL,
+  dados bytea NOT NULL,
+  atualizado_em timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'America/Sao_Paulo')
+);
+
+-- Histórico de alterações: quem mudou o quê
+CREATE TABLE IF NOT EXISTS auditoria (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  usuario_id bigint REFERENCES usuarios(id) ON DELETE SET NULL,
+  usuario_nome text,
+  papel text,
+  metodo text NOT NULL,
+  rota text NOT NULL,
+  acao text NOT NULL,
+  obra_id bigint,
+  detalhe text,
+  em timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'America/Sao_Paulo')
+);
+CREATE INDEX IF NOT EXISTS idx_aud_em ON auditoria(em DESC);
+CREATE INDEX IF NOT EXISTS idx_aud_usuario ON auditoria(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_aud_obra ON auditoria(obra_id);
+
+-- Localização no mapa
+ALTER TABLE obras ADD COLUMN IF NOT EXISTS lat numeric(9,6);
+ALTER TABLE obras ADD COLUMN IF NOT EXISTS lng numeric(9,6);
+
+-- Orçamento de custo por etapa; custos do caixa e materiais podem apontar a etapa
+ALTER TABLE obra_fases ADD COLUMN IF NOT EXISTS custo_orcado bigint NOT NULL DEFAULT 0 CHECK (custo_orcado >= 0);
+ALTER TABLE lancamentos ADD COLUMN IF NOT EXISTS fase_id bigint REFERENCES obra_fases(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_lanc_fase ON lancamentos(fase_id);
+ALTER TABLE obra_materiais ADD COLUMN IF NOT EXISTS fase_id bigint REFERENCES obra_fases(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_om_fase ON obra_materiais(fase_id);
+
+-- Histórico do avanço da obra (alimenta a curva S)
+CREATE TABLE IF NOT EXISTS obra_avancos (
+  obra_id bigint NOT NULL REFERENCES obras(id) ON DELETE CASCADE,
+  data date NOT NULL,
+  progresso integer NOT NULL CHECK (progresso BETWEEN 0 AND 100),
+  PRIMARY KEY (obra_id, data)
+);
+
+-- Aditivos de contrato (mudança de escopo, valor e prazo)
+CREATE TABLE IF NOT EXISTS obra_aditivos (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  obra_id bigint NOT NULL REFERENCES obras(id) ON DELETE CASCADE,
+  numero integer NOT NULL,
+  data date NOT NULL,
+  descricao text NOT NULL,
+  valor_delta bigint NOT NULL DEFAULT 0,
+  prazo_delta_dias integer NOT NULL DEFAULT 0,
+  valor_antes bigint NOT NULL,
+  previsao_antes date,
+  criado_por_id bigint REFERENCES usuarios(id),
+  criado_em timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'America/Sao_Paulo'),
+  UNIQUE (obra_id, numero)
+);
+CREATE INDEX IF NOT EXISTS idx_adit_criador ON obra_aditivos(criado_por_id);
+
+-- Fotos da obra (JPEG reduzido no navegador + miniatura)
+CREATE TABLE IF NOT EXISTS obra_fotos (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  obra_id bigint NOT NULL REFERENCES obras(id) ON DELETE CASCADE,
+  fase_id bigint REFERENCES obra_fases(id) ON DELETE SET NULL,
+  data date NOT NULL,
+  legenda text,
+  visivel_cliente integer NOT NULL DEFAULT 0,
+  tamanho integer NOT NULL,
+  dados bytea NOT NULL,
+  miniatura bytea NOT NULL,
+  autor_id bigint REFERENCES usuarios(id),
+  criado_em timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'America/Sao_Paulo')
+);
+CREATE INDEX IF NOT EXISTS idx_foto_obra ON obra_fotos(obra_id, data DESC);
+CREATE INDEX IF NOT EXISTS idx_foto_fase ON obra_fotos(fase_id);
+CREATE INDEX IF NOT EXISTS idx_foto_autor ON obra_fotos(autor_id);
+
+-- Aprovação de compras: material acima do limite espera a gestão
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'obra_materiais_status_check' AND pg_get_constraintdef(oid) LIKE '%aguardando_aprovacao%') THEN
+    ALTER TABLE obra_materiais DROP CONSTRAINT IF EXISTS obra_materiais_status_check;
+    ALTER TABLE obra_materiais ADD CONSTRAINT obra_materiais_status_check CHECK (status IN ('aguardando_aprovacao','solicitado','pedido','entregue','aplicado','cancelado','recusado'));
+  END IF;
+END $$;
+ALTER TABLE obra_materiais ADD COLUMN IF NOT EXISTS aprovado_por_id bigint REFERENCES usuarios(id);
+ALTER TABLE obra_materiais ADD COLUMN IF NOT EXISTS aprovado_em timestamp;
+CREATE INDEX IF NOT EXISTS idx_om_aprovador ON obra_materiais(aprovado_por_id);
+
+-- Cotação de materiais (3 fornecedores, escolhe a melhor)
+CREATE TABLE IF NOT EXISTS cotacoes (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  obra_id bigint NOT NULL REFERENCES obras(id) ON DELETE CASCADE,
+  descricao text NOT NULL,
+  unidade text NOT NULL DEFAULT 'un',
+  quantidade numeric(12,2) NOT NULL CHECK (quantidade > 0),
+  status text NOT NULL DEFAULT 'aberta' CHECK (status IN ('aberta','fechada','cancelada')),
+  vencedora_id bigint,
+  material_id bigint REFERENCES obra_materiais(id) ON DELETE SET NULL,
+  criado_por_id bigint REFERENCES usuarios(id),
+  criado_em timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'America/Sao_Paulo')
+);
+CREATE INDEX IF NOT EXISTS idx_cot_obra ON cotacoes(obra_id);
+CREATE INDEX IF NOT EXISTS idx_cot_material ON cotacoes(material_id);
+CREATE INDEX IF NOT EXISTS idx_cot_criador ON cotacoes(criado_por_id);
+CREATE TABLE IF NOT EXISTS cotacao_itens (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  cotacao_id bigint NOT NULL REFERENCES cotacoes(id) ON DELETE CASCADE,
+  fornecedor_id bigint NOT NULL REFERENCES fornecedores(id),
+  valor_unit bigint NOT NULL CHECK (valor_unit >= 0),
+  prazo_dias integer,
+  obs text,
+  UNIQUE (cotacao_id, fornecedor_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cotitem_forn ON cotacao_itens(fornecedor_id);
+
+-- Folha semanal de diárias (evita pagar duas vezes a mesma semana)
+CREATE TABLE IF NOT EXISTS folha_pagamentos (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  funcionario_id bigint NOT NULL REFERENCES funcionarios(id),
+  obra_id bigint NOT NULL REFERENCES obras(id),
+  semana_inicio date NOT NULL,
+  dias integer NOT NULL,
+  valor bigint NOT NULL CHECK (valor > 0),
+  lancamento_id bigint REFERENCES lancamentos(id) ON DELETE SET NULL,
+  criado_por_id bigint REFERENCES usuarios(id),
+  criado_em timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'America/Sao_Paulo'),
+  UNIQUE (funcionario_id, obra_id, semana_inicio)
+);
+CREATE INDEX IF NOT EXISTS idx_folha_obra ON folha_pagamentos(obra_id);
+CREATE INDEX IF NOT EXISTS idx_folha_lanc ON folha_pagamentos(lancamento_id);
+CREATE INDEX IF NOT EXISTS idx_folha_criador ON folha_pagamentos(criado_por_id);
+
+-- Pendências de acabamento / vistoria de entrega
+CREATE TABLE IF NOT EXISTS obra_pendencias (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  obra_id bigint NOT NULL REFERENCES obras(id) ON DELETE CASCADE,
+  local text,
+  descricao text NOT NULL,
+  responsavel text,
+  prazo date,
+  status text NOT NULL DEFAULT 'aberta' CHECK (status IN ('aberta','em_correcao','resolvida')),
+  resolvida_em date,
+  criado_por_id bigint REFERENCES usuarios(id),
+  criado_em timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'America/Sao_Paulo')
+);
+CREATE INDEX IF NOT EXISTS idx_pend_obra ON obra_pendencias(obra_id, status);
+CREATE INDEX IF NOT EXISTS idx_pend_criador ON obra_pendencias(criado_por_id);
+
+-- Segurança do trabalho: EPI entregue, treinamentos (NR) e inspeções de obra
+CREATE TABLE IF NOT EXISTS epi_entregas (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  funcionario_id bigint NOT NULL REFERENCES funcionarios(id),
+  item text NOT NULL,
+  ca text,
+  data date NOT NULL,
+  validade date,
+  obs text,
+  criado_por_id bigint REFERENCES usuarios(id)
+);
+CREATE INDEX IF NOT EXISTS idx_epi_func ON epi_entregas(funcionario_id, data DESC);
+CREATE INDEX IF NOT EXISTS idx_epi_criador ON epi_entregas(criado_por_id);
+CREATE TABLE IF NOT EXISTS treinamentos (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  funcionario_id bigint NOT NULL REFERENCES funcionarios(id),
+  tipo text NOT NULL,
+  data date NOT NULL,
+  validade date,
+  carga_horaria integer,
+  obs text,
+  criado_por_id bigint REFERENCES usuarios(id)
+);
+CREATE INDEX IF NOT EXISTS idx_trein_func ON treinamentos(funcionario_id, validade);
+CREATE INDEX IF NOT EXISTS idx_trein_criador ON treinamentos(criado_por_id);
+CREATE TABLE IF NOT EXISTS inspecoes_seguranca (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  obra_id bigint NOT NULL REFERENCES obras(id) ON DELETE CASCADE,
+  data date NOT NULL,
+  itens text NOT NULL,       -- JSON: [{item, ok}]
+  conformes integer NOT NULL,
+  total integer NOT NULL,
+  observacoes text,
+  responsavel_id bigint REFERENCES usuarios(id),
+  criado_em timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'America/Sao_Paulo')
+);
+CREATE INDEX IF NOT EXISTS idx_insp_obra ON inspecoes_seguranca(obra_id, data DESC);
+CREATE INDEX IF NOT EXISTS idx_insp_resp ON inspecoes_seguranca(responsavel_id);
+
+-- Portal do cliente: qual obra cada acesso de cliente enxerga
+CREATE TABLE IF NOT EXISTS cliente_acessos (
+  usuario_id bigint NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  obra_id bigint NOT NULL REFERENCES obras(id) ON DELETE CASCADE,
+  PRIMARY KEY (usuario_id, obra_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cacesso_obra ON cliente_acessos(obra_id);
+
+-- Fila de avisos (WhatsApp): guarda o que foi (ou será) enviado e evita repetir
+CREATE TABLE IF NOT EXISTS avisos_fila (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  usuario_id bigint REFERENCES usuarios(id) ON DELETE CASCADE,
+  telefone text,
+  texto text NOT NULL,
+  chave text NOT NULL,
+  status text NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente','enviado','erro','sem_telefone')),
+  erro text,
+  criado_em timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'America/Sao_Paulo'),
+  enviado_em timestamp,
+  UNIQUE (usuario_id, chave)
+);
+CREATE INDEX IF NOT EXISTS idx_fila_status ON avisos_fila(status);
+
+ALTER TABLE configuracoes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE marca_logo ENABLE ROW LEVEL SECURITY;
+ALTER TABLE auditoria ENABLE ROW LEVEL SECURITY;
+ALTER TABLE obra_avancos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE obra_aditivos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE obra_fotos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cotacoes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cotacao_itens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE folha_pagamentos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE obra_pendencias ENABLE ROW LEVEL SECURITY;
+ALTER TABLE epi_entregas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE treinamentos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inspecoes_seguranca ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cliente_acessos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE avisos_fila ENABLE ROW LEVEL SECURITY;

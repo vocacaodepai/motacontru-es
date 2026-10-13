@@ -1,0 +1,13 @@
+{
+  "name": "Mota Construções — Gestão de Obras",
+  "short_name": "Mota Obras",
+  "description": "Gestão de obras: presença, diário, fotos, materiais e documentos.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1d2a36",
+  "theme_color": "#1d2a36",
+  "lang": "pt-BR",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

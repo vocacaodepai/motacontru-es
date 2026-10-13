@@ -4,21 +4,22 @@ import { ErroNegocio } from './services.js';
 
 // Perfis. O nível vale para o FINANCEIRO: comercial (0, sem acesso) < leitor/sócio (1, só consulta)
 // < operador (2, lança e fecha o dia) < admin (3, tudo).
-export const PAPEIS = { comercial: 0, marketing: 0, estoque: 0, engenheiro: 0, leitor: 1, socio: 1, operador: 2, financeiro: 2, admin: 3 };
+export const PAPEIS = { comercial: 0, marketing: 0, estoque: 0, engenheiro: 0, cliente: 0, leitor: 1, socio: 1, operador: 2, financeiro: 2, admin: 3 };
 const perfilValido = (p) => Object.hasOwn(PAPEIS, p);
 
 // Áreas do site que cada perfil pode abrir. O servidor confere em cada rota; o menu só mostra o que o perfil acessa.
 export const AREAS = {
   // Áreas de obra: visao (visão geral), obras, agenda, materiais, terceiros, documentos, engenheiro (Meu dia), investidor.
   // Engenheiro enxerga só as obras sob sua responsabilidade (o servidor confere em cada rota) e não vê valores de contrato.
-  admin: ['visao', 'obras', 'agenda', 'materiais', 'terceiros', 'documentos', 'engenheiro', 'investidor', 'acessos', 'painel', 'lancar', 'fechar', 'extratos', 'mensal', 'patrimonio', 'aovivo', 'comercial', 'marketing', 'societario', 'dp', 'cobranca', 'estoque', 'fluxo', 'cadastros', 'roadmap'],
-  operador: ['visao', 'obras', 'agenda', 'materiais', 'documentos', 'painel', 'lancar', 'fechar', 'extratos', 'mensal', 'patrimonio', 'cobranca', 'fluxo', 'cadastros', 'roadmap'],
-  engenheiro: ['engenheiro', 'obras', 'agenda', 'materiais', 'terceiros', 'documentos'],
+  admin: ['visao', 'obras', 'mapa', 'agenda', 'materiais', 'terceiros', 'documentos', 'engenheiro', 'campo', 'investidor', 'fluxocaixa', 'seguranca', 'folha', 'historico', 'marca', 'importar', 'acessos', 'painel', 'lancar', 'fechar', 'extratos', 'mensal', 'patrimonio', 'aovivo', 'comercial', 'marketing', 'societario', 'dp', 'cobranca', 'estoque', 'fluxo', 'cadastros', 'roadmap'],
+  operador: ['visao', 'obras', 'mapa', 'agenda', 'materiais', 'documentos', 'painel', 'lancar', 'fechar', 'extratos', 'mensal', 'patrimonio', 'cobranca', 'fluxo', 'cadastros', 'roadmap'],
+  engenheiro: ['engenheiro', 'campo', 'obras', 'mapa', 'agenda', 'materiais', 'terceiros', 'documentos', 'seguranca'],
+  cliente: ['portal'], // portal do cliente: só a obra dele (o servidor confere em cada rota)
   // financeiro: só o painel financeiro (lançar, fechar o dia, extratos, controle mensal, patrimônio e cobrança), sem cadastros nem o resto
-  financeiro: ['obras', 'materiais', 'painel', 'lancar', 'fechar', 'extratos', 'mensal', 'patrimonio', 'cobranca'],
+  financeiro: ['obras', 'materiais', 'folha', 'painel', 'lancar', 'fechar', 'extratos', 'mensal', 'patrimonio', 'cobranca'],
   estoque: ['estoque'],
-  leitor: ['visao', 'obras', 'agenda', 'materiais', 'documentos', 'painel', 'lancar', 'fechar', 'extratos', 'mensal', 'patrimonio', 'fluxo', 'cadastros'],
-  socio: ['visao', 'obras', 'agenda', 'documentos', 'investidor', 'painel', 'mensal', 'patrimonio', 'aovivo', 'marketing', 'societario', 'fluxo'],
+  leitor: ['visao', 'obras', 'mapa', 'agenda', 'materiais', 'documentos', 'painel', 'lancar', 'fechar', 'extratos', 'mensal', 'patrimonio', 'fluxo', 'cadastros'],
+  socio: ['visao', 'obras', 'mapa', 'agenda', 'documentos', 'investidor', 'fluxocaixa', 'painel', 'mensal', 'patrimonio', 'aovivo', 'marketing', 'societario', 'fluxo'],
   comercial: ['comercial'],
   marketing: ['marketing'],
 };
