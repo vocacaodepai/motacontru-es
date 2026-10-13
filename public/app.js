@@ -1812,7 +1812,7 @@ state.aplicarMarca = () => aplicarMarca();
 // Telas de obra (obras.js e gestao.js): recebem os utilitários daqui e registram suas rotas
 (async () => {
   const util = { state, api, esc, brl, dataBR, nomeMes, ico, ICONES, toast, acao, modal, avatar, cls, pode, temArea, paraCentavos, brlInput, opts, MESES, hojeISO, rotas, barras, seletorMes, ligaMes, lerBase64, validarObrigatorios, ast, campo, seletor, PAPEL_NOME, rota, recarregarMeta, zap, primeiroNome };
-  for (const m of ['./obras.js', './gestao.js', './campo.js', './financas.js', './extras.js']) { try { (await import(m)).instalar(util); } catch (e) { console.error('Falha ao carregar', m, e); } }
+  for (const m of ['./obras.js', './gestao.js', './campo.js', './financas.js', './qualidade.js', './extras.js']) { try { (await import(m)).instalar(util); } catch (e) { console.error('Falha ao carregar', m, e); } }
   await aplicarMarca();
   await rota();
 })();

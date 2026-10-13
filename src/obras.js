@@ -63,6 +63,7 @@ const SELECT_OBRA = `
   SELECT o.*, c.nome AS cliente, c.telefone AS cliente_telefone, e.nome AS engenheiro, m.nome AS mestre,
     COALESCE((SELECT SUM(f.progresso * f.peso)::float8 / NULLIF(SUM(f.peso), 0) FROM obra_fases f WHERE f.obra_id = o.id), 0) AS progresso,
     (SELECT f.nome FROM obra_fases f WHERE f.obra_id = o.id AND f.progresso < 100 ORDER BY f.ordem, f.id LIMIT 1) AS fase_atual,
+    (SELECT COUNT(*)::int FROM obra_pendencias p WHERE p.obra_id = o.id AND p.status <> 'resolvida') AS pendencias_abertas,
     (SELECT COUNT(*) FROM obra_fases f WHERE f.obra_id = o.id AND f.progresso < 100 AND f.fim_prev < $1) AS fases_atrasadas,
     (SELECT COALESCE(SUM(l.valor), 0) FROM lancamentos l WHERE l.obra_id = o.id AND l.tipo = 'saida') AS custo_pago,
     (SELECT COALESCE(SUM(round(mt.quantidade * mt.valor_unit)), 0) FROM obra_materiais mt WHERE mt.obra_id = o.id AND mt.status NOT IN ('cancelado','recusado','aguardando_aprovacao') AND mt.lancamento_id IS NULL) AS material_a_pagar,

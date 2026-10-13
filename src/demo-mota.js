@@ -18,6 +18,8 @@ import * as FT from './fotos.js';
 import * as CT from './contratos.js';
 import * as CP from './compras.js';
 import * as FO from './folha.js';
+import * as QU from './qualidade.js';
+import * as PT from './portal.js';
 import { fotoDemo } from './demo-fotos.js';
 
 // sorteio repetível: a demonstração sai igual toda vez
@@ -502,6 +504,45 @@ export async function popularDemo() {
       await P.salvarItem(null, { mes, tipo: 'equipamento', descricao: 'Ferramentas elétricas e geradores', valor: cent(58000), situacao: mes === mesAtual ? 'em_manutencao' : 'em_obra' }, admin);
       await P.salvarItem(null, { mes, tipo: 'estoque', descricao: 'Material estocado no depósito central', valor: cent(mes === mesAtual ? 96000 : 74000), situacao: 'no_deposito' }, admin);
     }
+    // ---------- pendências de acabamento, segurança do trabalho e portal do cliente ----------
+    const pend = (obra, local, descricao, responsavel, prazo, status) => QU.salvarPendencia(admin, obra, null, { local, descricao, responsavel, prazo: prazo == null ? null : d(prazo), status });
+    await pend(O.d, 'Deck', 'Junta de dilatação com acabamento irregular', 'Equipe da piscina', 4, 'aberta');
+    await pend(O.d, 'Borda da piscina', 'Rejunte manchado em 3 peças', 'Equipe da piscina', 2, 'em_correcao');
+    await pend(O.d, 'Casa de máquinas', 'Identificar registros com etiquetas', 'Rubens Teixeira', -1, 'aberta');
+    await pend(O.a, 'Suíte master', 'Mancha de umidade na parede da janela', 'Nelson Araújo', 8, 'aberta');
+    await pend(O.a, 'Cozinha', 'Porta do armário com desnível', 'Marcenaria parceira', 12, 'aberta');
+    await pend(O.g, 'Sala', 'Retoque de pintura no rodapé', 'Nelson Araújo', -30, 'resolvida');
+    await pend(O.g, 'Banheiro social', 'Silicone da bancada', 'Wellington Souza', -28, 'resolvida');
+    const lote = [...pedreiros, ...serventes, ...peoes, carpinteiro, armador, eletricista, encanador, pintor, operador];
+    const TRE = [['NR-18 — Integração de segurança (obra)', 365 * 2], ['NR-35 — Trabalho em altura', 365 * 2], ['NR-6 — Uso de EPI', 365]];
+    let seq = 0;
+    for (const f of lote) {
+      seq++;
+      for (const [k, [tipo, valid]] of TRE.entries()) {
+        if (seq % 7 === 0 && k === 0) continue; // sem integração: alerta
+        if (k === 1 && !(seq % 3 === 0 || [armador, carpinteiro, eletricista].includes(f))) continue;
+        const dias = -(40 + ((seq * 17 + k * 29) % 300));
+        let validade = d(dias + valid);
+        if (seq % 8 === 3 && k === 2) validade = d(-12); // vencido
+        else if (seq % 9 === 0 && k === 2) validade = d(18); // vence logo
+        await QU.registrarTreinamento(admin, { funcionario_id: f, tipo, data: d(dias), validade, carga_horaria: k === 0 ? 8 : 16 });
+      }
+      await QU.registrarEpi(admin, { funcionario_id: f, item: 'Capacete + bota + luva', ca: String(31000 + seq * 7), data: d(-(20 + (seq * 5) % 80)), validade: d(seq % 8 === 0 ? 25 : 200) });
+    }
+    const checks = (falhas) => QU.CHECKLIST_INSPECAO.map((item, i) => ({ item, ok: !falhas.includes(i) }));
+    await QU.registrarInspecao(admin, O.a, { data: d(-3), itens: checks([]) });
+    await QU.registrarInspecao(admin, O.b, { data: d(-5), itens: checks([1, 6]), observacoes: 'Guarda-corpo do lado sul e sinalização do fosso: corrigir até amanhã.' });
+    await QU.registrarInspecao(admin, O.c, { data: d(-2), itens: checks([8]), observacoes: 'Reforçar os sanitários da frente de serviço 2.' });
+    await QU.registrarInspecao(admin, O.d, { data: d(-12), itens: checks([]) });
+    // acesso dos clientes (cada um vê só a própria obra)
+    const acessoCli = (nome, login, obra) => PT.criarAcesso(admin, { nome, login, senha, obra_id: obra });
+    await acessoCli('Marina Albuquerque (cliente Alphaville)', 'cliente.albuquerque', O.a);
+    await acessoCli('Roberto Vista Mar (cliente Barra)', 'cliente.vistamar', O.d);
+    // fotos liberadas ao cliente
+    await query("UPDATE obra_fotos SET visivel_cliente = 1 WHERE obra_id IN ($1,$2) AND id % 2 = 0", [O.a, O.d]);
+    // localização das obras (mapa)
+    for (const [obra, lat, lng] of [[O.a, -23.0087, -43.3752], [O.b, -23.0172, -43.4571], [O.c, -22.9601, -44.0412], [O.d, -23.0021, -43.3665], [O.e, -22.9068, -43.1779], [O.f, -22.9382, -43.3624], [O.g, -22.9937, -43.2742]]) await query('UPDATE obras SET lat=$1, lng=$2 WHERE id=$3', [lat, lng, obra]);
+
     await query("UPDATE socios SET data_entrada = $1 WHERE nome = 'Investidor Exemplo'", [d(-172)]);
   });
   return true;

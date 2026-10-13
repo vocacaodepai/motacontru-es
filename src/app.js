@@ -25,6 +25,9 @@ import * as CV from './curvas.js';
 import * as CT from './contratos.js';
 import * as CP from './compras.js';
 import * as FO from './folha.js';
+import * as QU from './qualidade.js';
+import * as RL from './relatorios.js';
+import * as PT from './portal.js';
 import { gerarPdf } from './relatorio.js';
 
 export const app = express();
@@ -81,6 +84,7 @@ app.delete('/api/auth/foto', A.logado, h(async (req, res) => { await A.removerFo
 const ler = A.exigir('leitor'), operar = A.exigir('operador'), admin = A.exigir('admin');
 
 app.get('/api/usuarios/:id/foto', A.logado, h(async (req, res) => {
+  if (req.usuario.papel === 'cliente' && idNum(req.params.id) !== req.usuario.id) return res.status(403).end();
   const foto = await A.lerFoto(idNum(req.params.id));
   if (!foto) return res.status(404).end();
   res.setHeader('Content-Type', 'image/jpeg');
@@ -98,7 +102,7 @@ const comAutor = (req) => ({ ...req.body, criado_por: req.usuario.nome, criado_p
 const idNum = (v) => { const n = Number(v); if (!Number.isInteger(n) || n < 1) throw new S.ErroNegocio('Identificador inválido.'); return n; };
 
 // equipe (nomes, perfis e fotos) para qualquer pessoa logada: usada em "quem fez" e nos avatares
-app.get('/api/equipe', A.logado, h(async (_, res) => res.json({ equipe: await A.equipe(), hoje: S.hoje() })));
+app.get('/api/equipe', A.logado, h(async (req, res) => res.json(req.usuario.papel === 'cliente' ? { equipe: [], hoje: S.hoje() } : { equipe: await A.equipe(), hoje: S.hoje() })));
 app.get('/api/meta', ler, h(async (_, res) => res.json({ ...(await S.meta()), equipe: await A.equipe(), hoje: S.hoje() })));
 
 app.get('/api/lancamentos', ler, h(async (req, res) => res.json(await S.listarLancamentos(req.query))));
@@ -301,6 +305,29 @@ app.get('/api/fotos/:id/:tipo', verFoto, h(async (req, res) => {
 }));
 app.put('/api/fotos/:id', verObras, h(async (req, res) => { await FT.atualizar(req.usuario, idNum(req.params.id), req.body); res.status(204).end(); }));
 app.delete('/api/fotos/:id', verObras, h(async (req, res) => { await FT.excluir(req.usuario, idNum(req.params.id)); res.status(204).end(); }));
+
+// ---------- pendências, segurança do trabalho, relatórios em PDF e portal do cliente ----------
+const verSeg = A.exigirArea('seguranca'), verPortal = A.exigirArea('portal');
+app.get('/api/obras/:id/pendencias', verObras, h(async (req, res) => res.json({ status: QU.STATUS_PENDENCIA, itens: await QU.listarPendencias(req.usuario, idNum(req.params.id)) })));
+app.post('/api/obras/:id/pendencias', verObras, h(async (req, res) => res.status(201).json({ id: await QU.salvarPendencia(req.usuario, idNum(req.params.id), null, req.body) })));
+app.put('/api/obras/:id/pendencias/:p', verObras, h(async (req, res) => res.json({ id: await QU.salvarPendencia(req.usuario, idNum(req.params.id), idNum(req.params.p), req.body) })));
+app.delete('/api/obras/:id/pendencias/:p', verObras, h(async (req, res) => { await QU.excluirPendencia(req.usuario, idNum(req.params.id), idNum(req.params.p)); res.status(204).end(); }));
+
+app.get('/api/seguranca', verSeg, h(async (req, res) => res.json({ ...(await QU.painelSeguranca(req.usuario)), sugestoes: QU.TREINAMENTOS_SUGERIDOS, checklist: QU.CHECKLIST_INSPECAO })));
+app.post('/api/seguranca/treinamentos', verSeg, h(async (req, res) => res.status(201).json({ id: await QU.registrarTreinamento(req.usuario, req.body) })));
+app.post('/api/seguranca/epi', verSeg, h(async (req, res) => res.status(201).json({ id: await QU.registrarEpi(req.usuario, req.body) })));
+app.delete('/api/seguranca/:tabela/:id', verSeg, h(async (req, res) => { await QU.excluirRegistroSeguranca(req.usuario, req.params.tabela, idNum(req.params.id)); res.status(204).end(); }));
+app.get('/api/obras/:id/inspecoes', verSeg, h(async (req, res) => res.json(await QU.listarInspecoes(req.usuario, idNum(req.params.id)))));
+app.post('/api/obras/:id/inspecoes', verSeg, h(async (req, res) => res.status(201).json({ id: await QU.registrarInspecao(req.usuario, idNum(req.params.id), req.body) })));
+
+app.get('/api/obras/:id/relatorio.pdf', verObras, h((req, res) => RL.relatorioObra(req.usuario, idNum(req.params.id), req.query.tipo, res)));
+app.get('/api/obras/:id/diario.pdf', verObras, h((req, res) => RL.diarioPdf(req.usuario, idNum(req.params.id), req.query.de, req.query.ate, res)));
+app.get('/api/obras/:id/termo-entrega.pdf', verObras, h((req, res) => RL.termoEntrega(req.usuario, idNum(req.params.id), res)));
+
+app.get('/api/portal', verPortal, h(async (req, res) => res.json(await PT.portal(req.usuario))));
+app.get('/api/obras/:id/acessos-cliente', admin, h(async (req, res) => res.json(await PT.acessosDaObra(idNum(req.params.id)))));
+app.post('/api/obras/:id/acessos-cliente', admin, h(async (req, res) => res.status(201).json(await PT.criarAcesso(req.usuario, { ...req.body, obra_ids: [idNum(req.params.id)] }))));
+app.delete('/api/obras/:id/acessos-cliente/:u', admin, h(async (req, res) => { await PT.removerAcesso(req.usuario, idNum(req.params.id), idNum(req.params.u)); res.status(204).end(); }));
 
 // ---------- indicadores, aditivos, compras, cotações e folha ----------
 const verFluxo = A.exigirArea('fluxocaixa'), verFolha = A.exigirArea('folha');

@@ -54,6 +54,10 @@ export async function alertas(usuario) {
     const reg = new Set(comDiario.map((r) => r.obra_id));
     for (const o of emAndamento) if (!reg.has(o.id)) add('info', 'diario', nome[o.id], 'Diário de obra de ontem sem preenchimento', `Registre as atividades de ${fmtData(ontem)}.`, ontem);
   }
+  const pendVenc = await query("SELECT obra_id, COUNT(*)::int AS n, MIN(prazo) AS prazo FROM obra_pendencias WHERE obra_id = ANY($1::bigint[]) AND status <> 'resolvida' AND prazo < $2 GROUP BY obra_id", [ids, h]);
+  for (const r of pendVenc) add('media', 'pendencia', nome[r.obra_id], `${r.n} pendência(s) de acabamento com prazo vencido`, `A mais antiga venceu em ${fmtData(r.prazo)}. Abra a aba Pendências da obra.`, r.prazo);
+  const insAtr = await query("SELECT o.id FROM obras o WHERE o.id = ANY($1::bigint[]) AND o.status = 'em_andamento' AND COALESCE((SELECT MAX(i.data) FROM inspecoes_seguranca i WHERE i.obra_id = o.id), '2000-01-01') < $2", [ids, addDias(h, -7)]);
+  for (const o of insAtr) add('info', 'inspecao', nome[o.id], 'Inspeção de segurança há mais de 7 dias', 'Faça o checklist de segurança do canteiro (menu Segurança).', null);
   if (gestao) {
     const [cp, md, terc, aso] = await Promise.all([
       query(`SELECT o.id, o.orcamento_custo, (SELECT COALESCE(SUM(l.valor),0) FROM lancamentos l WHERE l.obra_id = o.id AND l.tipo='saida')
