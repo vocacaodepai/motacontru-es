@@ -91,6 +91,10 @@ async function validar(b) {
   }
   if (b.tipo !== 'transferencia' && !b.categoria_id) throw new ErroNegocio('Escolha uma categoria.');
   if (b.obra_id && !(await one('SELECT 1 AS x FROM obras WHERE id = $1', [Number(b.obra_id)]))) throw new ErroNegocio('Obra inválida.');
+  if (b.fase_id) {
+    if (!b.obra_id) throw new ErroNegocio('Escolha a obra para informar a etapa.');
+    if (!(await one('SELECT 1 AS x FROM obra_fases WHERE id = $1 AND obra_id = $2', [Number(b.fase_id), Number(b.obra_id)]))) throw new ErroNegocio('Etapa inválida para esta obra.');
+  }
   return valor;
 }
 
@@ -101,14 +105,15 @@ const vals = (b, valor) => [
   b.pessoa_id ? Number(b.pessoa_id) : null,
   b.cliente?.trim() || null, b.descricao?.trim() || null, b.criado_por?.trim() || null, b.criado_por_id ? Number(b.criado_por_id) : null,
   b.tipo === 'transferencia' || !b.obra_id ? null : Number(b.obra_id),
+  b.tipo === 'transferencia' || !b.obra_id || !b.fase_id ? null : Number(b.fase_id),
 ];
 
 export async function criarLancamento(b) {
   const valor = await validar(b);
   if (await diaFechado(b.data)) throw new ErroNegocio(`O dia ${b.data} já está fechado. Reabra o dia para lançar.`, 409);
   const r = await one(`INSERT INTO lancamentos
-    (data,tipo,valor,conta_id,conta_destino_id,categoria_id,pessoa_id,cliente,descricao,criado_por,criado_por_id,obra_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`, vals(b, valor));
+    (data,tipo,valor,conta_id,conta_destino_id,categoria_id,pessoa_id,cliente,descricao,criado_por,criado_por_id,obra_id,fase_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`, vals(b, valor));
   return buscarLanc(r.id);
 }
 
@@ -118,8 +123,8 @@ export async function atualizarLancamento(id, b) {
   const valor = await validar(b);
   if ((await diaFechado(atual.data)) || (await diaFechado(b.data))) throw new ErroNegocio('Dia fechado. Reabra o dia para editar.', 409);
   // quem lançou originalmente continua sendo o autor; a edição só muda os dados do lançamento
-  await query(`UPDATE lancamentos SET data=$1,tipo=$2,valor=$3,conta_id=$4,conta_destino_id=$5,categoria_id=$6,pessoa_id=$7,cliente=$8,descricao=$9,obra_id=$10 WHERE id=$11`,
-    [...vals(b, valor).slice(0, 9), vals(b, valor)[11], id]);
+  await query(`UPDATE lancamentos SET data=$1,tipo=$2,valor=$3,conta_id=$4,conta_destino_id=$5,categoria_id=$6,pessoa_id=$7,cliente=$8,descricao=$9,obra_id=$10,fase_id=$11 WHERE id=$12`,
+    [...vals(b, valor).slice(0, 9), vals(b, valor)[11], vals(b, valor)[12], id]);
   return buscarLanc(id);
 }
 

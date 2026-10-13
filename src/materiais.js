@@ -2,8 +2,9 @@
 import { query, one, tx } from './db.js';
 import { ErroNegocio, isData, hoje } from './services.js';
 import { acesso } from './obras.js';
+import { config } from './marca.js';
 
-export const STATUS_MATERIAL = { solicitado: 'Solicitado', pedido: 'Pedido ao fornecedor', entregue: 'Entregue na obra', aplicado: 'Aplicado', cancelado: 'Cancelado' };
+export const STATUS_MATERIAL = { aguardando_aprovacao: 'Aguardando aprovação da gestão', recusado: 'Compra recusada', solicitado: 'Solicitado', pedido: 'Pedido ao fornecedor', entregue: 'Entregue na obra', aplicado: 'Aplicado', cancelado: 'Cancelado' };
 export const STATUS_TERCEIRO = { cotacao: 'Em cotação', contratada: 'Contratada', em_execucao: 'Em execução', concluida: 'Concluída', cancelada: 'Cancelada' };
 export const ESPECIALIDADES = ['Painel de LED e comunicação visual', 'Piscinas', 'Elétrica', 'Hidráulica', 'Esquadrias e vidros', 'Ar-condicionado', 'Elevadores', 'Gesso e forro', 'Pintura', 'Paisagismo', 'Impermeabilização', 'Marcenaria', 'Serralheria', 'Automação e segurança', 'Terraplenagem', 'Outra'];
 export const CATEGORIAS_FORNECEDOR = ['Cimento e concreto', 'Aço e ferragens', 'Material básico', 'Elétrica e hidráulica', 'Acabamentos', 'Madeira', 'Locação de equipamentos', 'Ferramentas', 'Outros'];
@@ -38,8 +39,8 @@ export async function salvarFornecedor(id, b) {
 }
 
 // ---------- materiais ----------
-const SELECT_MAT = `SELECT m.*, m.quantidade::float8 AS quantidade, round(m.quantidade * m.valor_unit)::bigint AS total, f.nome AS fornecedor, o.nome AS obra, o.codigo AS obra_codigo
-  FROM obra_materiais m JOIN obras o ON o.id = m.obra_id LEFT JOIN fornecedores f ON f.id = m.fornecedor_id`;
+const SELECT_MAT = `SELECT m.*, m.quantidade::float8 AS quantidade, round(m.quantidade * m.valor_unit)::bigint AS total, f.nome AS fornecedor, o.nome AS obra, o.codigo AS obra_codigo, fs.nome AS fase
+  FROM obra_materiais m JOIN obras o ON o.id = m.obra_id LEFT JOIN fornecedores f ON f.id = m.fornecedor_id LEFT JOIN obra_fases fs ON fs.id = m.fase_id`;
 
 export async function listarMateriais(usuario, { obra_id, status, de, ate } = {}) {
   const w = [], p = [];
@@ -58,11 +59,13 @@ export async function resumoMateriais(usuario) {
   const eng = usuario.papel === 'engenheiro' ? 'AND o.engenheiro_id IN (SELECT id FROM funcionarios WHERE usuario_id = $2)' : '';
   const p = usuario.papel === 'engenheiro' ? [h, usuario.id] : [h];
   const r = await one(`SELECT
+      COUNT(*) FILTER (WHERE m.status = 'aguardando_aprovacao') AS aguardando_aprovacao,
+      COALESCE(SUM(round(m.quantidade * m.valor_unit)) FILTER (WHERE m.status = 'aguardando_aprovacao'), 0) AS valor_aguardando,
       COUNT(*) FILTER (WHERE m.status IN ('solicitado','pedido')) AS a_caminho,
       COUNT(*) FILTER (WHERE m.status IN ('solicitado','pedido') AND m.entrega_prevista = $1) AS chegam_hoje,
       COUNT(*) FILTER (WHERE m.status IN ('solicitado','pedido') AND m.entrega_prevista < $1) AS atrasados,
-      COALESCE(SUM(round(m.quantidade * m.valor_unit)) FILTER (WHERE m.status <> 'cancelado' AND m.lancamento_id IS NULL), 0) AS a_pagar,
-      COALESCE(SUM(round(m.quantidade * m.valor_unit)) FILTER (WHERE m.status <> 'cancelado' AND date_trunc('month', m.data_pedido) = date_trunc('month', $1::date)), 0) AS comprado_mes
+      COALESCE(SUM(round(m.quantidade * m.valor_unit)) FILTER (WHERE m.status NOT IN ('cancelado','recusado','aguardando_aprovacao') AND m.lancamento_id IS NULL), 0) AS a_pagar,
+      COALESCE(SUM(round(m.quantidade * m.valor_unit)) FILTER (WHERE m.status NOT IN ('cancelado','recusado','aguardando_aprovacao') AND date_trunc('month', m.data_pedido) = date_trunc('month', $1::date)), 0) AS comprado_mes
     FROM obra_materiais m JOIN obras o ON o.id = m.obra_id WHERE true ${eng}`, p);
   return r;
 }
@@ -88,13 +91,39 @@ export async function salvarMaterial(usuario, obraId, id, b) {
   await acesso(usuario, obraId, { escrita: true });
   const m = lerMaterial(b);
   if (m.fornecedor_id && !(await one('SELECT 1 AS x FROM fornecedores WHERE id = $1', [m.fornecedor_id]))) throw new ErroNegocio('Fornecedor inválido.');
-  const v = [m.fornecedor_id, m.descricao, m.unidade, m.quantidade, m.valor_unit, m.nf_numero, m.status, m.data_pedido, m.entrega_prevista, m.entregue_em, m.obs];
+  const faseId = b.fase_id ? Number(b.fase_id) : null;
+  if (faseId && !(await one('SELECT 1 AS x FROM obra_fases WHERE id = $1 AND obra_id = $2', [faseId, obraId]))) throw new ErroNegocio('Etapa inválida para esta obra.');
+  const atual = id ? await one('SELECT status FROM obra_materiais WHERE id = $1 AND obra_id = $2', [id, obraId]) : null;
+  if (id && !atual) throw new ErroNegocio('Material não encontrado.', 404);
+  const gestao = usuario.papel === 'admin';
+  if (atual && ['aguardando_aprovacao', 'recusado'].includes(atual.status) && !gestao) {
+    if (atual.status === 'recusado') throw new ErroNegocio('Esta compra foi recusada pela gestão.', 409);
+    m.status = 'aguardando_aprovacao'; // enquanto espera, o engenheiro só corrige os dados
+  } else if (!id && !gestao && ['solicitado', 'pedido'].includes(m.status)) {
+    // compra grande feita pelo engenheiro espera a aprovação da gestão
+    const limite = Number(await config('limite_aprovacao', '0')) || 0;
+    if (limite > 0 && Math.round(m.quantidade * m.valor_unit) >= limite) m.status = 'aguardando_aprovacao';
+  } else if (id && !gestao && atual.status !== m.status && ['aguardando_aprovacao'].includes(m.status)) m.status = atual.status;
+  const v = [m.fornecedor_id, m.descricao, m.unidade, m.quantidade, m.valor_unit, m.nf_numero, m.status, m.data_pedido, m.entrega_prevista, m.entregue_em, m.obs, faseId];
   if (id) {
-    const r = await one('UPDATE obra_materiais SET fornecedor_id=$1,descricao=$2,unidade=$3,quantidade=$4,valor_unit=$5,nf_numero=$6,status=$7,data_pedido=$8,entrega_prevista=$9,entregue_em=$10,obs=$11 WHERE id=$12 AND obra_id=$13 RETURNING id', [...v, id, obraId]);
-    if (!r) throw new ErroNegocio('Material não encontrado.', 404);
+    await one('UPDATE obra_materiais SET fornecedor_id=$1,descricao=$2,unidade=$3,quantidade=$4,valor_unit=$5,nf_numero=$6,status=$7,data_pedido=$8,entrega_prevista=$9,entregue_em=$10,obs=$11,fase_id=$12 WHERE id=$13 AND obra_id=$14 RETURNING id', [...v, id, obraId]);
     return id;
   }
-  return (await one('INSERT INTO obra_materiais (fornecedor_id,descricao,unidade,quantidade,valor_unit,nf_numero,status,data_pedido,entrega_prevista,entregue_em,obs,obra_id,criado_por_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id', [...v, obraId, usuario.id])).id;
+  return (await one('INSERT INTO obra_materiais (fornecedor_id,descricao,unidade,quantidade,valor_unit,nf_numero,status,data_pedido,entrega_prevista,entregue_em,obs,fase_id,obra_id,criado_por_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id', [...v, obraId, usuario.id])).id;
+}
+
+// Aprovação de compras (gestão)
+export async function aprovarMaterial(usuario, id) {
+  if (usuario.papel !== 'admin') throw new ErroNegocio('Só a gestão aprova compras.', 403);
+  const r = await one("UPDATE obra_materiais SET status = 'pedido', aprovado_por_id = $2, aprovado_em = (now() AT TIME ZONE 'America/Sao_Paulo') WHERE id = $1 AND status = 'aguardando_aprovacao' RETURNING id", [id, usuario.id]);
+  if (!r) throw new ErroNegocio('Esta compra não está aguardando aprovação.', 409);
+}
+export async function recusarMaterial(usuario, id, motivo) {
+  if (usuario.papel !== 'admin') throw new ErroNegocio('Só a gestão recusa compras.', 403);
+  const t = txt(motivo);
+  if (!t) throw new ErroNegocio('Informe o motivo da recusa.');
+  const r = await one("UPDATE obra_materiais SET status = 'recusado', aprovado_por_id = $2, aprovado_em = (now() AT TIME ZONE 'America/Sao_Paulo'), obs = trim(both ' ' from coalesce(obs,'') || ' [Recusado: ' || $3 || ']') WHERE id = $1 AND status = 'aguardando_aprovacao' RETURNING id", [id, usuario.id, t]);
+  if (!r) throw new ErroNegocio('Esta compra não está aguardando aprovação.', 409);
 }
 
 // Atalho do dia a dia: marcar como entregue / aplicado
@@ -102,7 +131,9 @@ export async function mudarStatusMaterial(usuario, id, status) {
   const m = await one('SELECT obra_id FROM obra_materiais WHERE id = $1', [id]);
   if (!m) throw new ErroNegocio('Material não encontrado.', 404);
   await acesso(usuario, m.obra_id, { escrita: true });
-  if (!Object.hasOwn(STATUS_MATERIAL, status)) throw new ErroNegocio('Situação inválida.');
+  if (!Object.hasOwn(STATUS_MATERIAL, status) || ['aguardando_aprovacao', 'recusado'].includes(status)) throw new ErroNegocio('Situação inválida.');
+  const ant = await one('SELECT status FROM obra_materiais WHERE id = $1', [id]);
+  if (['aguardando_aprovacao', 'recusado'].includes(ant.status)) throw new ErroNegocio('Esta compra ainda precisa da aprovação da gestão.', 409);
   await query(`UPDATE obra_materiais SET status = $1, entregue_em = CASE WHEN $1 IN ('entregue','aplicado') THEN COALESCE(entregue_em, $3::date) ELSE entregue_em END WHERE id = $2`, [status, id, hoje()]);
 }
 
@@ -120,10 +151,11 @@ export async function pagarMaterial(usuario, id, b, criarLancamento) {
     const m = await one(`${SELECT_MAT} WHERE m.id = $1`, [id]);
     if (!m) throw new ErroNegocio('Material não encontrado.', 404);
     if (m.lancamento_id) throw new ErroNegocio('Este material já foi pago.', 409);
-    if (m.status === 'cancelado') throw new ErroNegocio('Material cancelado.', 409);
+    if (['cancelado', 'recusado'].includes(m.status)) throw new ErroNegocio('Este material está cancelado ou foi recusado.', 409);
+    if (m.status === 'aguardando_aprovacao') throw new ErroNegocio('Aprove a compra antes de pagar.', 409);
     if (!(m.total > 0)) throw new ErroNegocio('Informe o valor unitário do material antes de pagar.');
     const categoria = b.categoria_id || (await one("SELECT id FROM categorias WHERE nome = 'Outros materiais'"))?.id;
-    const l = await criarLancamento({ data: b.data || hoje(), tipo: 'saida', valor: m.total, conta_id: b.conta_id, categoria_id: categoria, obra_id: m.obra_id,
+    const l = await criarLancamento({ data: b.data || hoje(), tipo: 'saida', valor: m.total, conta_id: b.conta_id, categoria_id: categoria, obra_id: m.obra_id, fase_id: m.fase_id,
       descricao: `${m.descricao}${m.fornecedor ? ' — ' + m.fornecedor : ''}${m.nf_numero ? ' (NF ' + m.nf_numero + ')' : ''}`, criado_por: usuario.nome, criado_por_id: usuario.id });
     await query('UPDATE obra_materiais SET lancamento_id = $1 WHERE id = $2', [l.id, id]);
     return l;

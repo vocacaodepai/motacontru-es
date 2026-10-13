@@ -36,8 +36,8 @@ export function instalar(U) {
   const REGIME = { clt: 'CLT', diarista: 'Diarista', empreiteiro: 'Empreiteiro / autônomo', pj: 'PJ', terceirizado: 'Terceirizada', estagio: 'Estágio', informal: 'Sem registro', socio: 'Sócio', a_verificar: 'A verificar' };
   const PRESENCA = { presente: 'Presente', falta: 'Falta', atestado: 'Atestado', atraso: 'Atraso', folga: 'Folga' };
   const TAG_PRES = { presente: 'ok', falta: 'ruim', atestado: 'aviso', atraso: 'aviso', folga: '' };
-  const STATUS_MAT = { solicitado: 'Solicitado', pedido: 'Pedido ao fornecedor', entregue: 'Entregue na obra', aplicado: 'Aplicado', cancelado: 'Cancelado' };
-  const TAG_MAT = { solicitado: '', pedido: 'aviso', entregue: 'com_nota', aplicado: 'ok', cancelado: 'ruim' };
+  const STATUS_MAT = { aguardando_aprovacao: 'Aguardando aprovação', recusado: 'Recusada', solicitado: 'Solicitado', pedido: 'Pedido ao fornecedor', entregue: 'Entregue na obra', aplicado: 'Aplicado', cancelado: 'Cancelado' };
+  const TAG_MAT = { aguardando_aprovacao: 'ruim', recusado: 'ruim', solicitado: '', pedido: 'aviso', entregue: 'com_nota', aplicado: 'ok', cancelado: 'ruim' };
   const STATUS_TERC = { cotacao: 'Em cotação', contratada: 'Contratada', em_execucao: 'Em execução', concluida: 'Concluída', cancelada: 'Cancelada' };
   const TIPO_EVENTO = { entrega: 'Entrega de material', concretagem: 'Concretagem', vistoria: 'Vistoria', reuniao: 'Reunião', medicao: 'Medição', entrega_cliente: 'Entrega ao cliente', outro: 'Outro' };
   const STATUS_DOC = { pendente: 'Pendente', solicitado: 'Em andamento', emitido: 'Emitido', dispensado: 'Dispensado' };
@@ -57,6 +57,7 @@ export function instalar(U) {
   const vazio = (txt) => `<p class="mut">${txt}</p>`;
   const opcoesObra = async () => (state.obOpc = await api('/api/obras/opcoes'));
   U.extraAbas = []; // [chave, rótulo, função(el, dados, recarrega, hoje), soGestao] — registradas por outros módulos
+  U.FUNCAO = FUNCAO;
   U.obrasUtil = { STATUS_OBRA, TAG_STATUS, tagStatus, tagRitmo, barraProg, diasTxt, somaDias, diaSem, qtd, mapaUrl, TIPO_EVENTO, sitDoc, SIT_DOC };
 
   function abrirObra(id, aba) { state.obraId = id; state.obAba = aba || 'resumo'; if (location.hash !== '#obras') location.hash = '#obras'; else rotas.obras(); }
@@ -148,6 +149,7 @@ export function instalar(U) {
       <div class="grid">
         <div class="card kpi"><div class="l">Avanço da obra</div><div class="v">${o.progresso}%</div>${barraProg(o.progresso, o.ritmo?.esperado)}<small class="mut">${o.status === 'concluida' ? 'concluída' : `fase atual: ${esc(o.fase_atual || '—')}`}</small></div>
         <div class="card kpi"><div class="l">Prazo</div><div class="v" style="font-size:19px">${o.previsao_fim ? dataBR(o.previsao_fim) : '—'}</div><small class="${o.ritmo?.situacao === 'atrasada' ? 'neg' : 'mut'}">${esc(diasTxt(o))}</small></div>
+        ${o.desempenho && (o.desempenho.spi != null || o.desempenho.cpi != null) ? `<div class="card kpi"><div class="l">Desempenho</div><div class="v" style="font-size:19px">${o.desempenho.spi != null ? `<span class="tag ${{ ok: 'ok', atencao: 'aviso', ruim: 'ruim' }[o.desempenho.spi_faixa]}" title="Prazo: avanço real ÷ esperado">prazo ${String(o.desempenho.spi).replace('.', ',')}</span>` : ''} ${o.desempenho.cpi != null ? `<span class="tag ${{ ok: 'ok', atencao: 'aviso', ruim: 'ruim' }[o.desempenho.cpi_faixa]}" title="Custo: valor produzido ÷ custo realizado">custo ${String(o.desempenho.cpi).replace('.', ',')}</span>` : ''}</div><small class="mut">1,00 = como planejado; acima é melhor</small></div>` : ''}
         <div class="card kpi"><div class="l">Na obra hoje</div><div class="v">${o.presentes_hoje}<small class="mut"> / ${o.equipe_total}</small></div><small class="mut">${esc(o.mestre ? 'Mestre: ' + o.mestre : 'sem mestre de obras')}</small></div>
         <div class="card kpi"><div class="l">Documentação</div><div class="v">${o.docs_ok}<small class="mut"> / ${o.docs_total}</small></div><small class="${o.docs_pendentes || o.docs_vencidos ? 'neg' : 'mut'}">${o.docs_vencidos ? o.docs_vencidos + ' vencido(s) · ' : ''}${o.docs_pendentes} pendente(s)</small></div>
         ${eng ? '' : `<div class="card kpi"><div class="l">Custo comprometido</div><div class="v ${o.estouro ? 'neg' : ''}">${brl(o.custo_comprometido)}</div><small class="mut">orçado ${brl(o.orcamento_custo)} · pago ${brl(o.custo_pago)}</small></div>
@@ -225,7 +227,7 @@ export function instalar(U) {
     const adm = ehAdmin();
     const m = modal(`<h2>${f ? esc(f.nome) : 'Nova etapa'}</h2>
       <form class="form" id="ff" style="margin-top:14px">
-        ${adm ? `${campo('Nome da etapa', 'nome', f?.nome, 'text', 'class="larg"')}${campo('Peso (importância)', 'peso', f?.peso ?? 10, 'number')}${campo('Início previsto', 'inicio_prev', f?.inicio_prev, 'date')}${campo('Fim previsto', 'fim_prev', f?.fim_prev, 'date')}${f ? campo('Ordem', 'ordem', f.ordem, 'number') : ''}` : ''}
+        ${adm ? `${campo('Nome da etapa', 'nome', f?.nome, 'text', 'class="larg"')}${campo('Peso (importância)', 'peso', f?.peso ?? 10, 'number')}${campo('Início previsto', 'inicio_prev', f?.inicio_prev, 'date')}${campo('Fim previsto', 'fim_prev', f?.fim_prev, 'date')}${campo('Custo orçado da etapa (R$)', 'custo_orcado', f?.custo_orcado ? brlInput(f.custo_orcado) : '')}${f ? campo('Ordem', 'ordem', f.ordem, 'number') : ''}` : ''}
         <div class="larg"><label>Avanço da etapa: <b id="pv">${f?.progresso ?? 0}%</b></label><input type="range" name="progresso" min="0" max="100" step="5" value="${f?.progresso ?? 0}"></div>
         <div class="cheio"><label>Observação</label><input name="obs" value="${esc(f?.obs || '')}" placeholder="Ex.: concretagem adiada por chuva"></div></form>
       <div class="modal-acoes">${adm && f ? '<button class="perigo" id="del">Excluir etapa</button>' : ''}<span style="flex:1"></span><button class="sec" id="x">Cancelar</button><button id="ok">Salvar</button></div>`, 560);
@@ -234,7 +236,9 @@ export function instalar(U) {
     m.el.querySelector('#x').onclick = m.fechar;
     m.el.querySelector('#del')?.addEventListener('click', () => confirm('Excluir esta etapa?') && acao(async () => { await api(`/api/obras/${obraId}/fases/${f.id}`, { method: 'DELETE' }); m.fechar(); await depois(); }, 'Etapa excluída'));
     m.el.querySelector('#ok').onclick = () => acao(async () => {
-      await api(f ? `/api/obras/${obraId}/fases/${f.id}` : `/api/obras/${obraId}/fases`, { method: f ? 'PUT' : 'POST', body: Object.fromEntries(new FormData(m.el.querySelector('#ff'))) });
+      const v = Object.fromEntries(new FormData(m.el.querySelector('#ff')));
+      if (v.custo_orcado !== undefined) { v.custo_orcado = v.custo_orcado ? paraCentavos(v.custo_orcado) : 0; if (Number.isNaN(v.custo_orcado)) throw new Error('Custo orçado inválido.'); }
+      await api(f ? `/api/obras/${obraId}/fases/${f.id}` : `/api/obras/${obraId}/fases`, { method: f ? 'PUT' : 'POST', body: v });
       m.fechar(); await depois();
     }, 'Etapa salva');
   }
@@ -298,31 +302,35 @@ export function instalar(U) {
   function tabelaMateriais(lista, comObra) {
     if (!lista.length) return vazio('Nenhum material lançado.');
     return `<div class="tbl"><table><thead><tr><th>Material</th>${comObra ? '<th>Obra</th>' : ''}<th>Fornecedor</th><th class="n">Qtd.</th><th class="n">Total</th><th>Situação</th><th>Entrega</th><th></th></tr></thead><tbody>
-      ${lista.map((m) => `<tr style="${m.status === 'cancelado' ? 'opacity:.5' : ''}"><td><b>${esc(m.descricao)}</b>${m.nf_numero ? `<br><small class="mut">NF ${esc(m.nf_numero)}</small>` : ''}</td>${comObra ? `<td><small>${linkObra(m.obra_id, esc(m.obra_codigo))}</small></td>` : ''}<td><small>${esc(m.fornecedor || '—')}</small></td>
-        <td class="n">${qtd(m.quantidade)} ${esc(m.unidade)}</td><td class="n">${brl(m.total)}<br>${m.lancamento_id ? '<small class="pos">pago</small>' : m.status === 'cancelado' ? '' : '<small class="mut">a pagar</small>'}</td>
+      ${lista.map((m) => `<tr style="${m.status === 'cancelado' ? 'opacity:.5' : ''}"><td><b>${esc(m.descricao)}</b>${m.nf_numero ? `<br><small class="mut">NF ${esc(m.nf_numero)}</small>` : ''}${m.fase ? `<br><small class="mut">etapa: ${esc(m.fase)}</small>` : ''}</td>${comObra ? `<td><small>${linkObra(m.obra_id, esc(m.obra_codigo))}</small></td>` : ''}<td><small>${esc(m.fornecedor || '—')}</small></td>
+        <td class="n">${qtd(m.quantidade)} ${esc(m.unidade)}</td><td class="n">${brl(m.total)}<br>${m.lancamento_id ? '<small class="pos">pago</small>' : ['cancelado', 'recusado', 'aguardando_aprovacao'].includes(m.status) ? '' : '<small class="mut">a pagar</small>'}</td>
         <td><span class="tag ${TAG_MAT[m.status]}">${STATUS_MAT[m.status]}</span></td>
         <td><small>${m.entregue_em ? 'entregue ' + dataBR(m.entregue_em) : m.entrega_prevista ? 'prevista ' + dataBR(m.entrega_prevista) : '—'}</small></td>
-        <td class="n">${m.status === 'cancelado' ? '' : [
+        <td class="n">${['cancelado', 'recusado'].includes(m.status) ? '' : [
+          ehAdmin() && m.status === 'aguardando_aprovacao' ? `<button class="mini" data-apv="${m.id}">Aprovar</button> <button class="mini perigo" data-rcs="${m.id}">Recusar</button>` : '',
           podeEditar() && ['solicitado', 'pedido'].includes(m.status) ? `<button class="mini" data-mst="${m.id}" data-v="entregue">Recebi</button>` : '',
           podeEditar() && m.status === 'entregue' ? `<button class="mini sec" data-mst="${m.id}" data-v="aplicado">Aplicado</button>` : '',
-          pode('operador') && !m.lancamento_id && m.total > 0 ? `<button class="mini sec" data-mpg="${m.id}">Pagar</button>` : '',
+          pode('operador') && !m.lancamento_id && m.total > 0 && m.status !== 'aguardando_aprovacao' ? `<button class="mini sec" data-mpg="${m.id}">Pagar</button>` : '',
           podeEditar() ? `<button class="mini sec" data-med="${m.id}">Editar</button>` : ''].join(' ')}</td></tr>`).join('')}</tbody></table></div>`;
   }
   function ligaMateriais(el, lista, recarrega, obraId) {
     el.querySelectorAll('[data-mst]').forEach((b) => (b.onclick = () => acao(async () => { await api(`/api/materiais/${b.dataset.mst}/status`, { method: 'POST', body: { status: b.dataset.v } }); await recarrega(); }, 'Material atualizado')));
     el.querySelectorAll('[data-mpg]').forEach((b) => (b.onclick = () => janelaPagarMaterial(lista.find((m) => m.id === +b.dataset.mpg), recarrega)));
+    el.querySelectorAll('[data-apv]').forEach((b) => (b.onclick = () => acao(async () => { await api(`/api/materiais/${b.dataset.apv}/aprovar`, { method: 'POST', body: {} }); await recarrega(); }, 'Compra aprovada')));
+    el.querySelectorAll('[data-rcs]').forEach((b) => (b.onclick = () => { const t = prompt('Motivo da recusa:'); if (t) acao(async () => { await api(`/api/materiais/${b.dataset.rcs}/recusar`, { method: 'POST', body: { motivo: t } }); await recarrega(); }, 'Compra recusada'); }));
     el.querySelectorAll('[data-med]').forEach((b) => { const m = lista.find((x) => x.id === +b.dataset.med); b.onclick = () => janelaMaterial(m.obra_id || obraId, m, recarrega); });
   }
 
   async function janelaMaterial(obraId, mt, depois) {
     const forn = await api('/api/fornecedores').catch(() => []);
+    const fases = await api(`/api/obras/${obraId}/fases`).catch(() => []);
     const f = mt || { status: 'pedido', unidade: 'un', data_pedido: hojeISO() };
     const m = modal(`<h2>${mt ? 'Editar material' : 'Lançar material'}</h2>
       <form class="form" id="fm" style="margin-top:14px" autocomplete="off">
         ${campo('Material', 'descricao', f.descricao, 'text', 'class="larg"')}
         <div><label>Fornecedor</label><select name="fornecedor_id"><option value="">—</option>${opts(forn.filter((x) => x.ativo), f.fornecedor_id)}</select></div>
         ${campo('Quantidade', 'quantidade', f.quantidade)}${campo('Unidade', 'unidade', f.unidade)}${campo('Valor unitário (R$)', 'valor_unit', f.valor_unit != null ? brlInput(f.valor_unit) : '')}
-        ${seletor('Situação', 'status', STATUS_MAT, f.status)}${campo('Data do pedido', 'data_pedido', f.data_pedido, 'date')}${campo('Entrega prevista', 'entrega_prevista', f.entrega_prevista, 'date')}${campo('Nota fiscal', 'nf_numero', f.nf_numero)}
+        ${seletor('Situação', 'status', Object.fromEntries(Object.entries(STATUS_MAT).filter(([k]) => ehAdmin() ? !['aguardando_aprovacao', 'recusado'].includes(k) : ['solicitado', 'pedido', 'entregue', 'aplicado', 'cancelado'].includes(k))), f.status)}<div><label>Etapa (opcional)</label><select name="fase_id"><option value="">—</option>${fases.map((x) => `<option value="${x.id}" ${x.id === f.fase_id ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></div>${campo('Data do pedido', 'data_pedido', f.data_pedido, 'date')}${campo('Entrega prevista', 'entrega_prevista', f.entrega_prevista, 'date')}${campo('Nota fiscal', 'nf_numero', f.nf_numero)}
         <div class="cheio"><label>Observação</label><input name="obs" value="${esc(f.obs || '')}"></div></form>
       <div class="modal-acoes">${mt && podeEditar() && !mt.lancamento_id ? '<button class="perigo" id="del">Excluir</button>' : ''}<span style="flex:1"></span><button class="sec" id="x">Cancelar</button><button id="ok">Salvar</button></div>`, 640);
     m.el.querySelector('#x').onclick = m.fechar;
@@ -331,8 +339,9 @@ export function instalar(U) {
       const v = Object.fromEntries(new FormData(m.el.querySelector('#fm')));
       v.valor_unit = v.valor_unit ? paraCentavos(v.valor_unit) : 0;
       if (Number.isNaN(v.valor_unit)) throw new Error('Valor unitário inválido.');
-      await api(mt ? `/api/obras/${obraId}/materiais/${mt.id}` : `/api/obras/${obraId}/materiais`, { method: mt ? 'PUT' : 'POST', body: v });
+      const r = await api(mt ? `/api/obras/${obraId}/materiais/${mt.id}` : `/api/obras/${obraId}/materiais`, { method: mt ? 'PUT' : 'POST', body: v });
       m.fechar(); await depois();
+      if (r?.status === 'aguardando_aprovacao') toast('Compra acima do limite: enviada para a aprovação da gestão.');
     }, 'Material salvo');
   }
   U.janelaMaterial = janelaMaterial;
@@ -490,7 +499,9 @@ export function instalar(U) {
         ${d.medicoes.length ? `<div class="tbl"><table><tbody>${d.medicoes.map((x) => `<tr><td>${x.numero}ª</td><td>${esc(x.descricao || '')}<br><small class="${x.status !== 'recebida' && x.data_prevista < d.hoje ? 'neg' : 'mut'}">${x.status === 'recebida' ? 'recebida em ' + dataBR(x.recebido_em) : 'prevista ' + dataBR(x.data_prevista)}</small></td>
           <td class="n">${brl(x.valor)}</td><td><span class="tag ${x.status === 'recebida' ? 'ok' : x.status === 'faturada' ? 'aviso' : ''}">${STATUS_MED[x.status]}</span></td>
           <td class="n">${x.status !== 'recebida' && pode('operador') ? `<button class="mini" data-rec="${x.id}">Receber</button> ` : ''}${x.status !== 'recebida' && adm ? `<button class="mini sec" data-em="${x.id}">Editar</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : vazio('Nenhuma medição cadastrada.')}</div></div>
+      <div id="aditivos-extra"></div>
       <div class="card"><h2>Últimos lançamentos desta obra</h2>${d.lancamentos.length ? `<div class="tbl"><table><tbody>${d.lancamentos.map((l) => `<tr><td>${dataBR(l.data)}</td><td>${esc(l.categoria || '')}</td><td>${esc(l.descricao || '')}</td><td><small class="mut">${esc(l.conta)}</small></td><td class="n ${l.tipo === 'entrada' ? 'pos' : 'neg'}">${l.tipo === 'entrada' ? '+' : '−'} ${brl(l.valor)}</td></tr>`).join('')}</tbody></table></div>` : vazio('Nenhum lançamento.')}</div>`;
+    U.aditivosExtra?.(el.querySelector('#aditivos-extra'), d, recarrega);
     el.querySelector('#nmed')?.addEventListener('click', () => janelaMedicao(o.id, null, recarrega));
     el.querySelectorAll('[data-em]').forEach((b) => (b.onclick = () => janelaMedicao(o.id, d.medicoes.find((x) => x.id === +b.dataset.em), recarrega)));
     el.querySelectorAll('[data-rec]').forEach((b) => (b.onclick = () => {
@@ -526,7 +537,7 @@ export function instalar(U) {
     const d = await api('/api/materiais?' + qs);
     const r = d.resumo, adm = ehAdmin();
     const obrasLista = state.meta.obras?.length ? state.meta.obras : (await api('/api/obras')).map((o) => ({ id: o.id, codigo: o.codigo, nome: o.nome }));
-    $app.innerHTML = `<h1>Materiais</h1><p class="sub">Pedidos e entregas de material de todas as obras: o que está a caminho, o que chega hoje e o que ainda falta pagar.</p>
+    $app.innerHTML = `<h1>Materiais e compras</h1><p class="sub">Pedidos, cotações e entregas de material de todas as obras: o que está a caminho, o que chega hoje, o que espera aprovação e o que ainda falta pagar.</p>
       <div class="grid">
         <div class="card kpi"><div class="l">A caminho</div><div class="v">${r.a_caminho}</div></div>
         <div class="card kpi"><div class="l">Chegam hoje</div><div class="v ${r.chegam_hoje ? 'pos' : ''}">${r.chegam_hoje}</div></div>
@@ -536,11 +547,14 @@ export function instalar(U) {
       <div class="row"><div><label>Obra</label><select id="fo"><option value="">Todas</option>${obrasLista.map((o) => `<option value="${o.id}" ${String(f.obra_id) === String(o.id) ? 'selected' : ''}>${esc(o.codigo)} · ${esc(o.nome)}</option>`).join('')}</select></div>
         <div><label>Situação</label><select id="fs"><option value="">Todas</option>${Object.entries(STATUS_MAT).map(([k, v]) => `<option value="${k}" ${f.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
         <span style="flex:1"></span>${podeEditar() ? '<button id="nm">+ Lançar material</button>' : ''}</div>
-      <div class="card"><h2>Pedidos e entregas</h2>${tabelaMateriais(d.lista, true)}</div>
+      <div id="compras-extra"></div>
+      <div class="card"><div class="titulo-saldos"><h2>Pedidos e entregas</h2>${d.lista.length > 25 ? `<button class="mini sec" id="mtodos">${state.matTodos ? 'mostrar só os 25 mais recentes' : `mostrar todos (${d.lista.length})`}</button>` : ''}</div>${tabelaMateriais(state.matTodos ? d.lista : d.lista.slice(0, 25), true)}</div>
       <div class="card"><div class="titulo-saldos"><h2>Fornecedores</h2>${adm ? '<button class="mini" id="nf">+ Fornecedor</button>' : ''}</div>
         ${d.fornecedores.length ? `<div class="tbl"><table><thead><tr><th>Fornecedor</th><th>Categoria</th><th>Contato</th><th class="n">Prazo</th><th class="n">Pedidos</th><th class="n">Total comprado</th>${adm ? '<th></th>' : ''}</tr></thead><tbody>
         ${d.fornecedores.map((x) => `<tr style="${x.ativo ? '' : 'opacity:.5'}"><td><b>${esc(x.nome)}</b></td><td><small>${esc(x.categoria)}</small></td><td><small>${esc([x.contato, x.telefone].filter(Boolean).join(' · ') || '—')}</small></td><td class="n">${x.prazo_dias != null ? x.prazo_dias + ' d' : '—'}</td><td class="n">${x.pedidos}</td><td class="n">${brl(x.total_comprado)}</td>${adm ? `<td class="n"><button class="mini sec" data-ef="${x.id}">Editar</button></td>` : ''}</tr>`).join('')}</tbody></table></div>` : vazio('Nenhum fornecedor.')}</div>`;
     const recarrega = () => materiais();
+    U.comprasExtra?.(document.getElementById('compras-extra'), { d, recarrega, obras: obrasLista, fornecedores: d.fornecedores });
+    document.getElementById('mtodos')?.addEventListener('click', () => { state.matTodos = !state.matTodos; materiais(); });
     document.getElementById('fo').onchange = (e) => { f.obra_id = e.target.value; materiais(); };
     document.getElementById('fs').onchange = (e) => { f.status = e.target.value; materiais(); };
     ligaMateriais($app, d.lista, recarrega);

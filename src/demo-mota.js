@@ -15,6 +15,9 @@ import * as DP from './dp.js';
 import * as P from './patrimonio.js';
 import * as CB from './cobranca.js';
 import * as FT from './fotos.js';
+import * as CT from './contratos.js';
+import * as CP from './compras.js';
+import * as FO from './folha.js';
 import { fotoDemo } from './demo-fotos.js';
 
 // sorteio repetível: a demonstração sai igual toda vez
@@ -190,6 +193,27 @@ export async function popularDemo() {
     O.f = await mkObra({ nome: 'Edifício Comercial Jacarepaguá — 4 pavimentos', tipo: 'comercial', status: 'planejamento', endereco: 'Av. Embaixador Abelardo Bueno, 3500', bairro: 'Jacarepaguá', area_m2: 2400, pavimentos: 4, data_inicio: d(30), previsao_fim: d(500), valor_contrato: cent(9800000), orcamento_custo: cent(7650000), cliente_id: cli.lagoa, orcamento_id: orc.lagoa, engenheiro_id: rodrigo, descricao: 'Edifício de salas comerciais com garagem. Em fase de aprovação de projeto.' }, 0);
     O.g = await mkObra({ nome: 'Residência Joá — Entregue', tipo: 'residencial', status: 'concluida', endereco: 'Estrada do Joá, 800', bairro: 'Joá', area_m2: 380, pavimentos: 2, data_inicio: d(-420), previsao_fim: d(-60), fim_real: d(-52), valor_contrato: cent(2900000), orcamento_custo: cent(2250000), cliente_id: cli.nascimento, orcamento_id: orc.nascimento, engenheiro_id: rodrigo, mestre_id: antonio, descricao: 'Obra concluída e entregue ao cliente.' }, 100);
 
+    // custo orçado por etapa (proporcional ao peso) e histórico de avanço (alimenta a curva S)
+    await query(`UPDATE obra_fases f SET custo_orcado = round(o.orcamento_custo * f.peso::numeric / (SELECT SUM(peso) FROM obra_fases x WHERE x.obra_id = o.id)) FROM obras o WHERE o.id = f.obra_id`);
+    const FASES = {};
+    const ALVOS = { [O.a]: 58, [O.b]: 29, [O.c]: 41, [O.d]: 84, [O.e]: 40, [O.g]: 100 };
+    for (const obra of [O.a, O.b, O.c, O.d, O.e, O.g]) {
+      FASES[obra] = await query('SELECT id, inicio_prev, fim_prev, progresso FROM obra_fases WHERE obra_id = $1 ORDER BY ordem', [obra]);
+      const o = await one('SELECT data_inicio, fim_real FROM obras WHERE id = $1', [obra]);
+      const total = Math.max(1, Math.round((new Date((o.fim_real || H) + 'T12:00:00Z') - new Date(o.data_inicio + 'T12:00:00Z')) / 86400000));
+      for (let dia = 0; dia <= total; dia += 7) {
+        const f = dia / total, forma = f * f * (3 - 2 * f); // curva em S
+        await query('INSERT INTO obra_avancos (obra_id, data, progresso) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [obra, addDias(o.data_inicio, dia), Math.round(ALVOS[obra] * Math.min(1, forma * 1.02))]);
+      }
+      await query('INSERT INTO obra_avancos (obra_id, data, progresso) VALUES ($1,$2,$3) ON CONFLICT (obra_id, data) DO UPDATE SET progresso = EXCLUDED.progresso', [obra, o.fim_real || H, ALVOS[obra]]);
+    }
+    // etapa em que o custo cai: a do cronograma na data, limitada às etapas que já começaram (têm avanço)
+    const faseDe = (obra, data) => { const l = FASES[obra] || [], feitas = l.filter((f) => f.progresso > 0); const prev = l.find((f) => f.inicio_prev <= data && data <= f.fim_prev) || [...l].reverse().find((f) => f.inicio_prev <= data) || l[0]; if (!prev) return null; return (prev.progresso > 0 || !feitas.length ? prev : feitas.at(-1)).id; };
+    // aditivos de contrato
+    await CT.criarAditivo(admin, O.a, { descricao: 'Troca do revestimento da fachada por porcelanato', data: d(-45), valor_delta: cent(180000), prazo_delta_dias: 10 });
+    await CT.criarAditivo(admin, O.c, { descricao: 'Inclusão de quadra de lazer nas áreas comuns', data: d(-60), valor_delta: cent(260000), prazo_delta_dias: 20 });
+    await CT.criarAditivo(admin, O.c, { descricao: 'Redução do paisagismo (fase 2 adiada)', data: d(-20), valor_delta: cent(-40000), prazo_delta_dias: -5 });
+
     // ---------- equipe alocada + presenças ----------
     const alocar = async (obra, ids) => { for (const f of ids) await OB.alocar(admin, obra, { funcionario_id: f, desde: d(-90) }); };
     await alocar(O.a, [antonio, pedreiros[0], pedreiros[1], pedreiros[2], serventes[0], serventes[1], serventes[2], carpinteiro, armador, eletricista, peoes[0]]);
@@ -248,10 +272,10 @@ export async function popularDemo() {
       ['Locação de andaime fachadeiro (mês)', 'mês', 1850000, 'Locação de equipamentos', locadora],
     ];
     const lancs = []; // lançamentos em lote
-    const lanc = (data, tipo, valor, conta, cat, extra = {}) => lancs.push({ data, tipo, valor, conta: CTA[conta], cat: cat ? CAT[cat] : null, pessoa: extra.pessoa || null, desc: extra.desc || null, obra: extra.obra || null, por: extra.por || ana });
+    const lanc = (data, tipo, valor, conta, cat, extra = {}) => lancs.push({ data, tipo, valor, conta: CTA[conta], cat: cat ? CAT[cat] : null, pessoa: extra.pessoa || null, desc: extra.desc || null, obra: extra.obra || null, fase: extra.fase || null, por: extra.por || ana });
     const mat = async (obra, descTxt, un, qtd, vu, fornecedor, status, dias, pago, categoria) => {
       const dt = d(dias);
-      const id = await MT.salvarMaterial({ id: usuarioPorObra[obra] || ana.id, papel: 'admin' }, obra, null, { fornecedor_id: fornecedor, descricao: descTxt, unidade: un, quantidade: qtd, valor_unit: vu, status, data_pedido: dias > 0 ? H : dt, entrega_prevista: ['solicitado', 'pedido'].includes(status) ? dt : addDias(dt, 2), entregue_em: ['entregue', 'aplicado'].includes(status) ? addDias(dt, 2) > H ? H : addDias(dt, 2) : null, nf_numero: pago ? String(4000 + Math.round(rand() * 5000)) : null });
+      const id = await MT.salvarMaterial({ id: usuarioPorObra[obra] || ana.id, papel: 'admin' }, obra, null, { fornecedor_id: fornecedor, fase_id: faseDe(obra, dt), descricao: descTxt, unidade: un, quantidade: qtd, valor_unit: vu, status, data_pedido: dias > 0 ? H : dt, entrega_prevista: ['solicitado', 'pedido'].includes(status) ? dt : addDias(dt, 2), entregue_em: ['entregue', 'aplicado'].includes(status) ? addDias(dt, 2) > H ? H : addDias(dt, 2) : null, nf_numero: pago ? String(4000 + Math.round(rand() * 5000)) : null });
       if (pago) {
         const l = await MT.pagarMaterial(admin, id, { conta_id: vu * qtd > 500000 ? CTA['Itaú Empresas'] : CTA['Cartão corporativo'], categoria_id: CAT[categoria], data: addDias(dt, 2) > H ? H : addDias(dt, 2) }, criarLancamento);
         return l;
@@ -294,6 +318,20 @@ export async function popularDemo() {
     await medir(O.f, [[980000, 'prevista', 45], [980000, 'prevista', 120]]);
     await medir(O.g, [[870000, 'recebida', -400], [870000, 'recebida', -280], [1160000, 'recebida', -150]]);
 
+    // ---------- compras: aprovação, cotações ----------
+    await CP.definirLimite(admin, cent(8000));
+    const rodE = { id: rodUser.id, nome: rodUser.nome, papel: 'engenheiro' }, camE = { id: camUser.id, nome: camUser.nome, papel: 'engenheiro' }, anaF = { id: ana.id, nome: ana.nome, papel: 'financeiro' };
+    await MT.salvarMaterial(rodE, O.a, null, { descricao: 'Kit de esquadrias de alumínio (12 janelas)', unidade: 'kit', quantidade: 1, valor_unit: cent(38500), fornecedor_id: acabamento, status: 'pedido', entrega_prevista: d(20), fase_id: faseDe(O.a, d(20)) });
+    await MT.salvarMaterial(camE, O.c, null, { descricao: 'Locação de bomba de concreto (3 diárias)', unidade: 'diária', quantidade: 3, valor_unit: cent(5400), fornecedor_id: locadora, status: 'pedido', entrega_prevista: d(6), fase_id: faseDe(O.c, d(6)) });
+    const gerador = await MT.salvarMaterial(rodE, O.b, null, { descricao: 'Gerador 150 kVA (compra)', unidade: 'un', quantidade: 1, valor_unit: cent(92000), fornecedor_id: locadora, status: 'pedido', entrega_prevista: d(10) });
+    await MT.recusarMaterial(admin, gerador, 'Melhor alugar: uso previsto de apenas 3 meses.');
+    const cotar = (u, obra, descricao, unidade, quantidade, precos) => CP.criarCotacao(u, obra, { descricao, unidade, quantidade, itens: precos.map(([f, v, p]) => ({ fornecedor_id: f, valor_unit: cent(v), prazo_dias: p })) });
+    await cotar(rodE, O.b, 'Cimento CP-II 50 kg', 'sc', 400, [[deposito, 34.9, 1], [concreteira, 36.5, 2], [acabamento, 38.2, 4]]);
+    await cotar(camE, O.c, 'Brita 1', 'm³', 80, [[deposito, 155, 2], [concreteira, 162, 3], [aco, 149, 5]]);
+    const fechar = async (u, obra, descricao, unidade, quantidade, precos) => { const id = await cotar(u, obra, descricao, unidade, quantidade, precos); const c = (await CP.listarCotacoes(u, { obra_id: obra })).find((x) => x.id === id); await CP.escolher(u, id, c.itens[0].id); };
+    await fechar(rodE, O.a, 'Areia média', 'm³', 40, [[deposito, 140, 1], [concreteira, 152, 2], [aco, 148, 3]]);
+    await fechar(camE, O.e, 'Perfil metálico 50x30', 'barra', 60, [[aco, 78, 3], [deposito, 85, 2]]);
+
     // ---------- caixa: custos por obra, despesas gerais, aportes e distribuição ----------
     const GRUPO = [['Cimento e concreto', 18], ['Aço e ferragens', 10], ['Alvenaria (blocos e tijolos)', 10], ['Elétrica e hidráulica (material)', 8], ['Acabamentos (piso, revestimento, tinta)', 8], ['Diárias', 14], ['Salário', 14], ['Empreiteiros e autônomos', 8], ['Locação de equipamentos', 6], ['Combustível', 3], ['EPI e uniformes', 1]];
     const sorteiaCat = () => { let r = rand() * GRUPO.reduce((a, [, w]) => a + w, 0); for (const [c, w] of GRUPO) { if ((r -= w) <= 0) return c; } return GRUPO[0][0]; };
@@ -312,7 +350,7 @@ export async function popularDemo() {
           const categoria = sorteiaCat();
           const valor = arred(porSemana / 3 * entre(0.6, 1.4));
           const pequeno = ['Diárias', 'Combustível', 'EPI e uniformes'].includes(categoria);
-          lanc(d(dia), 'saida', valor, pequeno ? 'Fundo fixo de obras' : 'Itaú Empresas', categoria, { obra, desc: pequeno ? 'Despesa de campo' : categoria });
+          lanc(d(dia), 'saida', valor, pequeno ? 'Fundo fixo de obras' : 'Itaú Empresas', categoria, { obra, fase: faseDe(obra, d(dia)), desc: pequeno ? 'Despesa de campo' : categoria });
         }
       }
     }
@@ -340,10 +378,12 @@ export async function popularDemo() {
     // grava em lote
     for (let i = 0; i < lancs.length; i += 200) {
       const lote = lancs.slice(i, i + 200); const p = [];
-      const valores = lote.map((l, k) => { const b = k * 10; p.push(l.data, l.tipo, l.valor, l.conta, l.cat, l.pessoa ? pessoas[l.pessoa] : null, l.desc, l.obra, 'demo', l.por.id); return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10})`; });
-      await query(`INSERT INTO lancamentos (data,tipo,valor,conta_id,categoria_id,pessoa_id,descricao,obra_id,criado_por,criado_por_id) VALUES ${valores.join(',')}`, p);
+      const valores = lote.map((l, k) => { const b = k * 11; p.push(l.data, l.tipo, l.valor, l.conta, l.cat, l.pessoa ? pessoas[l.pessoa] : null, l.desc, l.obra, 'demo', l.por.id, l.fase); return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10},$${b + 11})`; });
+      await query(`INSERT INTO lancamentos (data,tipo,valor,conta_id,categoria_id,pessoa_id,descricao,obra_id,criado_por,criado_por_id,fase_id) VALUES ${valores.join(',')}`, p);
     }
     await query("INSERT INTO lancamentos (data,tipo,valor,conta_id,conta_destino_id,descricao,criado_por,criado_por_id) VALUES ($1,'transferencia',$2,$3,$4,'Reforço de caixa (fictício)','demo',$5)", [d(-170), cent(1200000), CTA['Inter PJ (Empreendimentos)'], CTA['Itaú Empresas'], ana.id]);
+    // folha de diárias da semana passada (já paga); a desta semana fica pendente
+    await FO.pagar(anaF, { semana: addDias(H, -7), conta_id: CTA['Itaú Empresas'] });
     // o caixa de obra e o cartão são repostos todo mês pela conta principal (fica com saldo realista)
     await query(`INSERT INTO lancamentos (data,tipo,valor,conta_id,conta_destino_id,descricao,criado_por,criado_por_id)
       SELECT date_trunc('month', data)::date, 'transferencia', SUM(valor), $1::bigint, conta_id, 'Reposição do caixa de obra', 'demo', $2::bigint

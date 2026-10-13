@@ -57,13 +57,15 @@ export async function alertas(usuario) {
   if (gestao) {
     const [cp, md, terc, aso] = await Promise.all([
       query(`SELECT o.id, o.orcamento_custo, (SELECT COALESCE(SUM(l.valor),0) FROM lancamentos l WHERE l.obra_id = o.id AND l.tipo='saida')
-          + (SELECT COALESCE(SUM(round(m.quantidade*m.valor_unit)),0) FROM obra_materiais m WHERE m.obra_id = o.id AND m.status <> 'cancelado' AND m.lancamento_id IS NULL)
+          + (SELECT COALESCE(SUM(round(m.quantidade*m.valor_unit)),0) FROM obra_materiais m WHERE m.obra_id = o.id AND m.status NOT IN ('cancelado','recusado','aguardando_aprovacao') AND m.lancamento_id IS NULL)
           + (SELECT COALESCE(SUM(t.valor - t.pago),0) FROM obra_terceiros t WHERE t.obra_id = o.id AND t.status <> 'cancelada') AS comprometido
         FROM obras o WHERE o.id = ANY($1::bigint[]) AND o.orcamento_custo > 0`, [ids]),
       query("SELECT * FROM obra_medicoes WHERE obra_id = ANY($1::bigint[]) AND status <> 'recebida' AND data_prevista < $2 ORDER BY data_prevista", [ids, h]),
       query("SELECT * FROM terceirizadas WHERE ativo = 1 AND (certidoes_validade <= $1 OR seguro_validade <= $1)", [addDias(h, 30)]),
       query("SELECT nome, aso_validade FROM funcionarios WHERE ativo = 1 AND aso_validade IS NOT NULL AND aso_validade <= $1 ORDER BY aso_validade", [addDias(h, 30)]),
     ]);
+    const aprov = await one("SELECT COUNT(*) AS n, COALESCE(SUM(round(quantidade * valor_unit)),0) AS v FROM obra_materiais WHERE status = 'aguardando_aprovacao'");
+    if (aprov.n > 0) out.push({ nivel: 'alta', tipo: 'aprovacao', obra_id: null, obra: 'Compras', titulo: `${aprov.n} compra(s) aguardando sua aprovação`, detalhe: `Total ${brl(aprov.v)}. Abra Materiais e Compras para aprovar ou recusar.`, data: null });
     for (const c of cp) if (c.comprometido > c.orcamento_custo) add('alta', 'estouro', nome[c.id], 'Custo acima do orçado', `Comprometido ${brl(c.comprometido)} para um orçamento de ${brl(c.orcamento_custo)}.`, null);
     else if (c.comprometido > c.orcamento_custo * 0.9) add('media', 'estouro', nome[c.id], 'Custo chegando ao limite do orçado', `${Math.round((c.comprometido / c.orcamento_custo) * 100)}% do orçamento de custo já comprometido.`, null);
     for (const m of md) add('alta', 'medicao_atrasada', nome[m.obra_id], `Medição ${m.numero} a receber em atraso (${brl(m.valor)})`, `Previsto para ${fmtData(m.data_prevista)}. Acione a cobrança.`, m.data_prevista);

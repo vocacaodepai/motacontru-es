@@ -1,7 +1,7 @@
 import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { iniciar } from './db.js';
+import { iniciar, one } from './db.js';
 import { seed } from './seed.js';
 import * as S from './services.js';
 import * as A from './auth.js';
@@ -21,6 +21,10 @@ import * as PN from './painel.js';
 import * as AU from './auditoria.js';
 import * as MA from './marca.js';
 import * as FT from './fotos.js';
+import * as CV from './curvas.js';
+import * as CT from './contratos.js';
+import * as CP from './compras.js';
+import * as FO from './folha.js';
 import { gerarPdf } from './relatorio.js';
 
 export const app = express();
@@ -269,7 +273,7 @@ app.put('/api/obras/:id/medicoes/:med', verObras, h(async (req, res) => res.json
 app.post('/api/obras/:id/terceiros', verObras, h(async (req, res) => res.status(201).json({ id: await MT.salvarContratoTerceiro(req.usuario, idNum(req.params.id), null, req.body) })));
 app.put('/api/obras/:id/terceiros/:t', verObras, h(async (req, res) => res.json({ id: await MT.salvarContratoTerceiro(req.usuario, idNum(req.params.id), idNum(req.params.t), req.body) })));
 app.delete('/api/obras/:id/terceiros/:t', verObras, h(async (req, res) => { await MT.excluirContratoTerceiro(req.usuario, idNum(req.params.id), idNum(req.params.t)); res.status(204).end(); }));
-app.post('/api/obras/:id/materiais', verObras, h(async (req, res) => res.status(201).json({ id: await MT.salvarMaterial(req.usuario, idNum(req.params.id), null, req.body) })));
+app.post('/api/obras/:id/materiais', verObras, h(async (req, res) => { const id = await MT.salvarMaterial(req.usuario, idNum(req.params.id), null, req.body); res.status(201).json({ id, status: (await one('SELECT status FROM obra_materiais WHERE id = $1', [id])).status }); }));
 app.put('/api/obras/:id/materiais/:m', verObras, h(async (req, res) => res.json({ id: await MT.salvarMaterial(req.usuario, idNum(req.params.id), idNum(req.params.m), req.body) })));
 app.post('/api/obras/:id/documentos/checklist', verObras, h(async (req, res) => res.status(201).json({ criados: await DC.gerarChecklist(req.usuario, idNum(req.params.id)) })));
 app.post('/api/obras/:id/documentos', verObras, h(async (req, res) => res.status(201).json({ id: await DC.salvarDocumento(req.usuario, idNum(req.params.id), req.body) })));
@@ -297,6 +301,26 @@ app.get('/api/fotos/:id/:tipo', verFoto, h(async (req, res) => {
 }));
 app.put('/api/fotos/:id', verObras, h(async (req, res) => { await FT.atualizar(req.usuario, idNum(req.params.id), req.body); res.status(204).end(); }));
 app.delete('/api/fotos/:id', verObras, h(async (req, res) => { await FT.excluir(req.usuario, idNum(req.params.id)); res.status(204).end(); }));
+
+// ---------- indicadores, aditivos, compras, cotações e folha ----------
+const verFluxo = A.exigirArea('fluxocaixa'), verFolha = A.exigirArea('folha');
+app.get('/api/obras/:id/fases', verObras, h(async (req, res) => res.json(await OB.fasesDaObra(req.usuario, idNum(req.params.id)))));
+app.get('/api/obras/:id/curva-s', verObras, h(async (req, res) => res.json(await CV.curvaS(req.usuario, idNum(req.params.id)))));
+app.get('/api/obras/:id/custos-etapas', verObras, h(async (req, res) => res.json(await CV.custosPorEtapa(req.usuario, idNum(req.params.id)))));
+app.post('/api/obras/:id/aditivos', verObras, h(async (req, res) => res.status(201).json({ numero: await CT.criarAditivo(req.usuario, idNum(req.params.id), req.body) })));
+app.delete('/api/obras/:id/aditivos/:aid', verObras, h(async (req, res) => { await CT.desfazerAditivo(req.usuario, idNum(req.params.id), idNum(req.params.aid)); res.status(204).end(); }));
+app.get('/api/fluxo-projetado', verFluxo, h(async (_, res) => res.json(await CV.fluxoProjetado())));
+app.get('/api/compras/config', verMat, h(async (_, res) => res.json({ limite_aprovacao: await CP.limiteAprovacao() })));
+app.put('/api/compras/config', admin, h(async (req, res) => res.json({ limite_aprovacao: await CP.definirLimite(req.usuario, req.body.limite_aprovacao) })));
+app.post('/api/materiais/:id/aprovar', admin, h(async (req, res) => { await MT.aprovarMaterial(req.usuario, idNum(req.params.id)); res.status(204).end(); }));
+app.post('/api/materiais/:id/recusar', admin, h(async (req, res) => { await MT.recusarMaterial(req.usuario, idNum(req.params.id), req.body.motivo); res.status(204).end(); }));
+app.get('/api/cotacoes', verMat, h(async (req, res) => res.json(await CP.listarCotacoes(req.usuario, req.query))));
+app.post('/api/obras/:id/cotacoes', verMat, h(async (req, res) => res.status(201).json({ id: await CP.criarCotacao(req.usuario, idNum(req.params.id), req.body) })));
+app.post('/api/cotacoes/:id/precos', verMat, h(async (req, res) => { await CP.registrarPreco(req.usuario, idNum(req.params.id), req.body); res.status(204).end(); }));
+app.post('/api/cotacoes/:id/escolher', verMat, h(async (req, res) => res.json(await CP.escolher(req.usuario, idNum(req.params.id), req.body.item_id))));
+app.post('/api/cotacoes/:id/cancelar', verMat, h(async (req, res) => { await CP.cancelarCotacao(req.usuario, idNum(req.params.id)); res.status(204).end(); }));
+app.get('/api/folha/:data', verFolha, h(async (req, res) => res.json(await FO.semana(data(req)))));
+app.post('/api/folha/pagar', verFolha, operar, h(async (req, res) => res.json(await FO.pagar(req.usuario, req.body))));
 
 // ---------- Marketing: campanhas, números dos anúncios e retorno ----------
 // Ver: admin, sócio e marketing. Lançar/editar: admin e marketing.

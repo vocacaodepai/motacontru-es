@@ -347,7 +347,7 @@ async function lancar() {
           <select name="conta_id" required>${contas.filter((c) => c.ativo).map((c) => `<option value="${c.id}">${esc(c.nome)} — ${esc(c.empresa)} (${MOD[c.modalidade]})</option>`).join('')}</select><small class="saldo-conta" id="saldo-conta"></small></div>
         ${t === 'transferencia' ? `<div><label>Destino</label><select name="conta_destino_id" required>${contas.filter((c) => c.ativo).map((c) => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>` : `<div><label>Categoria</label><select name="categoria_id" required>${opts(cats, '', 'Selecione…')}</select></div>`}
         <div><label>Valor (R$)</label><input name="valor" inputmode="decimal" placeholder="0,00" required autofocus></div>
-        ${t !== 'transferencia' ? `<div><label>Obra (se for custo ou receita de uma obra)</label><select name="obra_id"><option value="">— despesa geral da empresa —</option>${(state.meta.obras || []).filter((o) => o.status !== 'cancelada').map((o) => `<option value="${o.id}">${esc(o.codigo)} · ${esc(o.nome)}</option>`).join('')}</select></div>` : ''}
+        ${t !== 'transferencia' ? `<div><label>Obra (se for custo ou receita de uma obra)</label><select name="obra_id"><option value="">— despesa geral da empresa —</option>${(state.meta.obras || []).filter((o) => o.status !== 'cancelada').map((o) => `<option value="${o.id}">${esc(o.codigo)} · ${esc(o.nome)}</option>`).join('')}</select></div><div id="box-fase" hidden><label>Etapa da obra (opcional)</label><select name="fase_id"><option value="">—</option></select></div>` : ''}
         ${t === 'entrada' ? '<div><label>Cliente</label><input name="cliente" placeholder="Nome do cliente"></div>' : ''}
         ${t === 'saida' ? `<div><label>Pessoa (se for pagamento a alguém)</label><select name="pessoa_id">${opts(pessoas.filter((p) => p.ativo), '', '— nenhuma —')}</select></div>` : ''}
         <div class="cheio"><label>Descrição</label><input name="descricao" placeholder="Ex.: cimento da laje, diária do pedreiro, taxa do alvará…"></div>
@@ -374,6 +374,12 @@ async function lancar() {
     el.innerHTML = `Saldo atual desta conta: <b>${brl(c.saldo)}</b>${passa ? ` — atenção: esta ${t === 'saida' ? 'saída' : 'transferência'} de ${brl(v)} é maior que o saldo` : ''}`;
   };
   f.conta_id.addEventListener('change', mostrarSaldo); f.valor.addEventListener('input', mostrarSaldo); mostrarSaldo();
+  // etapas da obra escolhida (para saber o custo de cada etapa)
+  f.obra_id?.addEventListener('change', async () => {
+    const box = document.getElementById('box-fase'); if (!box) return;
+    box.hidden = !f.obra_id.value; f.fase_id.innerHTML = '<option value="">—</option>';
+    if (f.obra_id.value) { try { (await api(`/api/obras/${f.obra_id.value}/fases`)).forEach((x) => f.fase_id.insertAdjacentHTML('beforeend', `<option value="${x.id}">${esc(x.nome)}</option>`)); } catch { /* sem etapas */ } }
+  });
   document.getElementById('f').onsubmit = (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
@@ -1806,7 +1812,7 @@ state.aplicarMarca = () => aplicarMarca();
 // Telas de obra (obras.js e gestao.js): recebem os utilitários daqui e registram suas rotas
 (async () => {
   const util = { state, api, esc, brl, dataBR, nomeMes, ico, ICONES, toast, acao, modal, avatar, cls, pode, temArea, paraCentavos, brlInput, opts, MESES, hojeISO, rotas, barras, seletorMes, ligaMes, lerBase64, validarObrigatorios, ast, campo, seletor, PAPEL_NOME, rota, recarregarMeta, zap, primeiroNome };
-  for (const m of ['./obras.js', './gestao.js', './campo.js', './extras.js']) { try { (await import(m)).instalar(util); } catch (e) { console.error('Falha ao carregar', m, e); } }
+  for (const m of ['./obras.js', './gestao.js', './campo.js', './financas.js', './extras.js']) { try { (await import(m)).instalar(util); } catch (e) { console.error('Falha ao carregar', m, e); } }
   await aplicarMarca();
   await rota();
 })();

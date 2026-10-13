@@ -2,6 +2,8 @@
 // Valores em centavos; datas em YYYY-MM-DD (America/Sao_Paulo).
 import { query, one, tx } from './db.js';
 import { ErroNegocio, isData, isMes, hoje, addDias, intervaloMes } from './services.js';
+import { indicadoresDe } from './indicadores.js';
+import { listarAditivos } from './contratos.js';
 
 export const TIPOS = { residencial: 'Residencial', condominio: 'Condomínio', comercial: 'Comercial', reforma: 'Reforma', piscina: 'Piscina e lazer', fachada: 'Fachada', infraestrutura: 'Infraestrutura', outro: 'Outro' };
 export const STATUS = { planejamento: 'Planejamento', em_andamento: 'Em andamento', pausada: 'Pausada', concluida: 'Concluída', cancelada: 'Cancelada' };
@@ -63,7 +65,7 @@ const SELECT_OBRA = `
     (SELECT f.nome FROM obra_fases f WHERE f.obra_id = o.id AND f.progresso < 100 ORDER BY f.ordem, f.id LIMIT 1) AS fase_atual,
     (SELECT COUNT(*) FROM obra_fases f WHERE f.obra_id = o.id AND f.progresso < 100 AND f.fim_prev < $1) AS fases_atrasadas,
     (SELECT COALESCE(SUM(l.valor), 0) FROM lancamentos l WHERE l.obra_id = o.id AND l.tipo = 'saida') AS custo_pago,
-    (SELECT COALESCE(SUM(round(mt.quantidade * mt.valor_unit)), 0) FROM obra_materiais mt WHERE mt.obra_id = o.id AND mt.status <> 'cancelado' AND mt.lancamento_id IS NULL) AS material_a_pagar,
+    (SELECT COALESCE(SUM(round(mt.quantidade * mt.valor_unit)), 0) FROM obra_materiais mt WHERE mt.obra_id = o.id AND mt.status NOT IN ('cancelado','recusado','aguardando_aprovacao') AND mt.lancamento_id IS NULL) AS material_a_pagar,
     (SELECT COALESCE(SUM(t.valor - t.pago), 0) FROM obra_terceiros t WHERE t.obra_id = o.id AND t.status <> 'cancelada') AS terceiros_a_pagar,
     (SELECT COALESCE(SUM(md.valor), 0) FROM obra_medicoes md WHERE md.obra_id = o.id AND md.status = 'recebida') AS recebido,
     (SELECT COALESCE(SUM(md.valor), 0) FROM obra_medicoes md WHERE md.obra_id = o.id AND md.status <> 'recebida') AS a_receber,
@@ -84,6 +86,7 @@ function montar(o, usuario, h) {
   const r = {
     ...o, progresso, ritmo: ritmo(o, progresso, h),
     custo_comprometido, margem_prevista: o.valor_contrato - Math.max(o.orcamento_custo, custo_comprometido),
+    desempenho: o.status === 'em_andamento' ? indicadoresDe({ esperado: ritmo(o, progresso, h)?.esperado ?? 0, progresso, orcamento_custo: o.orcamento_custo, custo: custo_comprometido }) : null,
     estouro: o.orcamento_custo > 0 && custo_comprometido > o.orcamento_custo,
   };
   if (usuario?.papel === 'engenheiro') { r.valor_contrato = null; r.recebido = null; r.a_receber = null; r.margem_prevista = null; }
@@ -114,7 +117,7 @@ export async function detalhe(usuario, id) {
   await acesso(usuario, id);
   const h = hoje();
   const base = montar(await one(`${SELECT_OBRA} WHERE o.id = $2`, [h, id]), usuario, h);
-  const [fases, equipe, terceiros, materiais, documentos, diario, eventos, medicoes, financeiro, lancamentos, avisos] = await Promise.all([
+  const [fases, equipe, terceiros, materiais, documentos, diario, eventos, medicoes, financeiro, lancamentos, avisos, aditivos] = await Promise.all([
     query('SELECT * FROM obra_fases WHERE obra_id = $1 ORDER BY ordem, id', [id]),
     query(`SELECT q.id, q.funcionario_id, q.funcao, q.desde, q.ate, f.nome, f.funcao_obra, f.regime, f.vinculo, f.telefone, f.valor_diaria,
         p.situacao AS situacao_hoje
@@ -122,8 +125,8 @@ export async function detalhe(usuario, id) {
       LEFT JOIN obra_presencas p ON p.obra_id = q.obra_id AND p.funcionario_id = q.funcionario_id AND p.data = $2
       WHERE q.obra_id = $1 ORDER BY (q.ate IS NOT NULL AND q.ate < $2), f.nome`, [id, h]),
     query('SELECT t.*, x.nome AS terceirizada, x.especialidade, x.telefone FROM obra_terceiros t JOIN terceirizadas x ON x.id = t.terceirizada_id WHERE t.obra_id = $1 ORDER BY t.id', [id]),
-    query(`SELECT m.*, f.nome AS fornecedor, round(m.quantidade * m.valor_unit)::bigint AS total, m.quantidade::float8 AS quantidade
-      FROM obra_materiais m LEFT JOIN fornecedores f ON f.id = m.fornecedor_id WHERE m.obra_id = $1 ORDER BY m.data_pedido DESC, m.id DESC`, [id]),
+    query(`SELECT m.*, f.nome AS fornecedor, fs.nome AS fase, round(m.quantidade * m.valor_unit)::bigint AS total, m.quantidade::float8 AS quantidade
+      FROM obra_materiais m LEFT JOIN fornecedores f ON f.id = m.fornecedor_id LEFT JOIN obra_fases fs ON fs.id = m.fase_id WHERE m.obra_id = $1 ORDER BY m.data_pedido DESC, m.id DESC`, [id]),
     query(`SELECT d.id, d.obra_id, d.tipo, d.numero, d.status, d.emitido_por_id, d.emissor_externo, d.emitido_em, d.validade, d.obs, d.anexo_nome, d.anexo_tamanho, d.atualizado_em,
         pr.nome AS emitido_por, pr.conselho, pr.registro_profissional
       FROM obra_documentos d LEFT JOIN funcionarios pr ON pr.id = d.emitido_por_id WHERE d.obra_id = $1 ORDER BY d.id`, [id]),
@@ -135,10 +138,11 @@ export async function detalhe(usuario, id) {
     usuario.papel === 'engenheiro' ? [] : query(`SELECT l.id, l.data, l.tipo, l.valor, l.descricao, cat.nome AS categoria, c.nome AS conta
       FROM lancamentos l JOIN contas c ON c.id = l.conta_id LEFT JOIN categorias cat ON cat.id = l.categoria_id WHERE l.obra_id = $1 ORDER BY l.data DESC, l.id DESC LIMIT 40`, [id]),
     query('SELECT a.*, u.nome AS autor FROM avisos a LEFT JOIN usuarios u ON u.id = a.criado_por_id WHERE a.obra_id = $1 ORDER BY a.criado_em DESC LIMIT 10', [id]),
+    usuario.papel === 'engenheiro' ? [] : listarAditivos(id),
   ]);
   return {
     obra: base, fases: fases.map((f) => ({ ...f, atrasada: f.progresso < 100 && !!f.fim_prev && f.fim_prev < h, em_andamento: f.progresso > 0 && f.progresso < 100 })),
-    equipe, terceiros, materiais, documentos, diario, eventos, medicoes, lancamentos, avisos,
+    equipe, terceiros, materiais, documentos, diario, eventos, medicoes, lancamentos, avisos, aditivos,
     financeiro: { por_categoria: financeiro, total_pago: base.custo_pago },
     hoje: h,
   };
@@ -221,6 +225,12 @@ export async function gerarFasesModelo(usuario, obraId) {
   });
 }
 
+// Guarda o avanço da obra do dia (alimenta a curva S)
+async function registrarAvanco(obraId) {
+  const r = await one('SELECT COALESCE(SUM(progresso * peso)::float8 / NULLIF(SUM(peso), 0), 0) AS p FROM obra_fases WHERE obra_id = $1', [obraId]);
+  await query(`INSERT INTO obra_avancos (obra_id, data, progresso) VALUES ($1,$2,$3) ON CONFLICT (obra_id, data) DO UPDATE SET progresso = EXCLUDED.progresso`, [obraId, hoje(), Math.round(r.p)]);
+}
+
 export async function salvarFase(usuario, obraId, faseId, b) {
   const o = await acesso(usuario, obraId, { escrita: true });
   for (const c of ['inicio_prev', 'fim_prev', 'inicio_real', 'fim_real']) if (txt(b[c]) && !isData(b[c])) throw new ErroNegocio(`Data inválida em "${c.replace(/_/g, ' ')}".`);
@@ -235,9 +245,12 @@ export async function salvarFase(usuario, obraId, faseId, b) {
     if (progresso < 100) fimReal = null;
     // o engenheiro só atualiza o andamento; nome, peso e prazos previstos são da gestão
     const gestao = usuario.papel === 'admin';
-    await query(`UPDATE obra_fases SET progresso=$1, inicio_real=$2, fim_real=$3, obs=$4${gestao ? ', nome=$6, peso=$7, inicio_prev=$8, fim_prev=$9, ordem=$10' : ''} WHERE id=$5`,
-      gestao ? [progresso, inicioReal, fimReal, txt(b.obs) ?? atual.obs, faseId, txt(b.nome) || atual.nome, Number(b.peso) > 0 ? Math.round(Number(b.peso)) : atual.peso, txt(b.inicio_prev) ?? atual.inicio_prev, txt(b.fim_prev) ?? atual.fim_prev, Number.isInteger(Number(b.ordem)) && b.ordem !== '' ? Number(b.ordem) : atual.ordem]
+    const custoOrc = b.custo_orcado == null || b.custo_orcado === '' ? atual.custo_orcado : Math.round(Number(b.custo_orcado));
+    if (!Number.isFinite(custoOrc) || custoOrc < 0) throw new ErroNegocio('Custo orçado da etapa inválido.');
+    await query(`UPDATE obra_fases SET progresso=$1, inicio_real=$2, fim_real=$3, obs=$4${gestao ? ', nome=$6, peso=$7, inicio_prev=$8, fim_prev=$9, ordem=$10, custo_orcado=$11' : ''} WHERE id=$5`,
+      gestao ? [progresso, inicioReal, fimReal, txt(b.obs) ?? atual.obs, faseId, txt(b.nome) || atual.nome, Number(b.peso) > 0 ? Math.round(Number(b.peso)) : atual.peso, txt(b.inicio_prev) ?? atual.inicio_prev, txt(b.fim_prev) ?? atual.fim_prev, Number.isInteger(Number(b.ordem)) && b.ordem !== '' ? Number(b.ordem) : atual.ordem, custoOrc]
         : [progresso, inicioReal, fimReal, txt(b.obs) ?? atual.obs, faseId]);
+    await registrarAvanco(obraId);
     // obra com avanço > 0 e ainda em planejamento passa a "em andamento"
     if (o.status === 'planejamento' && progresso > 0) await query("UPDATE obras SET status='em_andamento', data_inicio=COALESCE(data_inicio,$2) WHERE id=$1", [obraId, hoje()]);
     return faseId;
@@ -245,12 +258,21 @@ export async function salvarFase(usuario, obraId, faseId, b) {
   soGestao(usuario);
   if (!txt(b.nome)) throw new ErroNegocio('Informe o nome da etapa.');
   const ordem = (await one('SELECT COALESCE(MAX(ordem),0)+1 AS n FROM obra_fases WHERE obra_id = $1', [obraId])).n;
-  return (await one('INSERT INTO obra_fases (obra_id, ordem, nome, peso, inicio_prev, fim_prev, progresso) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
-    [obraId, ordem, txt(b.nome), Number(b.peso) > 0 ? Math.round(Number(b.peso)) : 10, txt(b.inicio_prev), txt(b.fim_prev), progresso])).id;
+  const custoOrc = b.custo_orcado == null || b.custo_orcado === '' ? 0 : Math.round(Number(b.custo_orcado));
+  if (!Number.isFinite(custoOrc) || custoOrc < 0) throw new ErroNegocio('Custo orçado da etapa inválido.');
+  const novo = (await one('INSERT INTO obra_fases (obra_id, ordem, nome, peso, inicio_prev, fim_prev, progresso, custo_orcado) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
+    [obraId, ordem, txt(b.nome), Number(b.peso) > 0 ? Math.round(Number(b.peso)) : 10, txt(b.inicio_prev), txt(b.fim_prev), progresso, custoOrc])).id;
+  await registrarAvanco(obraId);
+  return novo;
 }
 export async function excluirFase(usuario, obraId, faseId) {
   soGestao(usuario);
   await query('DELETE FROM obra_fases WHERE id = $1 AND obra_id = $2', [faseId, obraId]);
+  await registrarAvanco(obraId);
+}
+export async function fasesDaObra(usuario, obraId) {
+  await acesso(usuario, obraId);
+  return query('SELECT id, ordem, nome, progresso, custo_orcado FROM obra_fases WHERE obra_id = $1 ORDER BY ordem, id', [obraId]);
 }
 
 // ---------- equipe e presença ----------
